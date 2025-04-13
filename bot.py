@@ -56,6 +56,10 @@ def ensure_user(user_id):
             "timezone": "UTC"
         }
 
+def has_role(user, allowed_roles):
+    """Return True if user has at least one allowed role name."""
+    return any(role.name in allowed_roles for role in getattr(user, 'roles', []))
+
 def get_level_and_progress(xp):
     level = 1
     for i, threshold in enumerate(LEVEL_THRESHOLDS):
@@ -137,23 +141,44 @@ async def on_message(message):
         save_xp(xp_data)
 
 # SLASH COMMANDS
-@bot.tree.command(name="xp")
-@app_commands.describe(name="Character name to check XP for")
-async def xp(interaction: discord.Interaction, name: str = None):
+@bot.tree.command(name="xp", description="View XP, level, and progress for a character")
+@app_commands.describe(char_name="Optional character name (defaults to active)")
+async def xp(interaction: discord.Interaction, char_name: str = None):
     user_id = str(interaction.user.id)
     ensure_user(user_id)
-    chars = xp_data[user_id]["characters"]
 
-    name = name or xp_data[user_id]["active"]
-    if name not in chars:
-        match = difflib.get_close_matches(name, chars.keys(), n=1, cutoff=0.6)
-        if not match:
-            await interaction.response.send_message("❌ Character not found.", ephemeral=True)
+    characters = xp_data[user_id]["characters"]
+    if not characters:
+        await interaction.response.send_message("❌ You don’t have any characters yet.", ephemeral=True)
+        return
+
+    if not char_name:
+        char_name = xp_data[user_id]["active"]
+        if not char_name:
+            await interaction.response.send_message("❌ No active character. Use `/xp_active` to set one.", ephemeral=True)
             return
-        name = match[0]
 
-    xp_amount = chars[name]["xp"]
-    await interaction.response.send_message(f"{name} has {xp_amount} XP.", ephemeral=True)
+    if char_name not in characters:
+        matches = difflib.get_close_matches(char_name, characters.keys(), n=1, cutoff=0.6)
+        if not matches:
+            await interaction.response.send_message(f"❌ Character '{char_name}' not found.", ephemeral=True)
+            return
+        char_name = matches[0]
+
+    char = characters[char_name]
+    xp = char["xp"]
+    level, progress, required = get_level_and_progress(xp)
+
+    desc = f"XP: {xp}\nLevel: {level}"
+    if progress is not None:
+        bar = int((progress / required) * 20)
+        desc += f"\nProgress: `[{'█'*bar}{'-'*(20-bar)}] {progress}/{required}`"
+
+    embed = discord.Embed(title=char_name, description=desc)
+    if char.get("image_url"):
+        embed.set_image(url=char["image_url"])
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="xp_create", description="Create a new character")
 @app_commands.describe(char_name="Character name", image_url="Optional image URL")
@@ -194,6 +219,29 @@ async def xp_delete(interaction: discord.Interaction, name: str):
 
     save_xp(xp_data)
     await interaction.response.send_message(f"🗑️ Deleted character '{name}'.", ephemeral=True)
+
+@bot.tree.command(name="xp_active", description="Set which of your characters is currently active")
+@app_commands.describe(char_name="Name of the character to activate")
+async def xp_active(interaction: discord.Interaction, char_name: str):
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
+
+    chars = xp_data[user_id]["characters"]
+    if not chars:
+        await interaction.response.send_message("❌ You have no characters to activate.", ephemeral=True)
+        return
+
+    # Fuzzy match if exact name isn't found
+    if char_name not in chars:
+        matches = difflib.get_close_matches(char_name, chars.keys(), n=1, cutoff=0.6)
+        if not matches:
+            await interaction.response.send_message(f"❌ No character found matching '{char_name}'.", ephemeral=True)
+            return
+        char_name = matches[0]
+
+    xp_data[user_id]["active"] = char_name
+    save_xp(xp_data)
+    await interaction.response.send_message(f"🟢 '{char_name}' is now your active character.", ephemeral=True)
 
 @bot.tree.command(name="xp_list")
 async def xp_list(interaction: discord.Interaction):
