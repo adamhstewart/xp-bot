@@ -13,3 +13,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 CMD ["watchmedo", "auto-restart", "--ignore-patterns=*.pyc;__pycache__", "--directory=.", "--pattern=*.py", "--recursive", "--", "python", "bot.py"]
+
+ENV PYTHONUNBUFFERED=1

@@ -88,17 +88,24 @@ def should_reset_xp(user_data):
     today_local = user_time.date().isoformat()
     return user_data.get("last_xp_reset") != today_local
 
+@bot.command(name="ping")
+async def ping(ctx):
+    await ctx.send("🏓 Pong!")
+
+@bot.command(name="sync_commands")
+async def sync_commands(ctx):
+    await ctx.send("👋 Sync command was triggered!")
+    guild = discord.Object(id=GUILD_ID)
+    synced = await bot.tree.sync(guild=guild)
+    await ctx.send(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+
 @bot.event
 async def on_ready():
-    if GUILD_ID:
-        guild = discord.Object(id=GUILD_ID)
-        await bot.tree.sync(guild=guild)
-        print(f"✅ Synced slash commands to guild {GUILD_ID}")
-    else:
-        await bot.tree.sync()
-        print("🌍 Synced slash commands globally")
-
     print(f"{bot.user.name} is online.")
+
+    # Optional: Print registered slash commands for debug
+    for command in bot.tree.get_commands():
+        print(f"📦 Loaded command: /{command.name}")
 
 @bot.event
 async def on_message(message):
@@ -187,21 +194,15 @@ async def xp_create(interaction: discord.Interaction, char_name: str, image_url:
     ensure_user(user_id)
 
     if char_name in xp_data[user_id]["characters"]:
-        await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
-        return
+        msg = f"❌ Character '{char_name}' already exists."
+    else:
+        xp_data[user_id]["characters"][char_name] = {"xp": 0, "image_url": image_url or ""}
+        if not xp_data[user_id]["active"]:
+            xp_data[user_id]["active"] = char_name
+        save_xp(xp_data)
+        msg = f"✅ Character '{char_name}' created and set as active."
 
-    xp_data[user_id]["characters"][char_name] = {"xp": 0, "image_url": image_url or ""}
-    if not xp_data[user_id]["active"]:
-        xp_data[user_id]["active"] = char_name
-
-    save_xp(xp_data)
-    await interaction.response.send_message(
-        f"✅ Character '{char_name}' created and set as active.",
-        ephemeral=True
-    )
-
-    save_xp(xp_data)
-    await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
+    await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="xp_delete")
 @app_commands.describe(name="Character name to delete")
@@ -220,7 +221,7 @@ async def xp_delete(interaction: discord.Interaction, name: str):
     save_xp(xp_data)
     await interaction.response.send_message(f"🗑️ Deleted character '{name}'.", ephemeral=True)
 
-@bot.tree.command(name="xp_active", description="Set which of your characters is currently active")
+@bot.tree.command(name="xp_active", description="Set one of your characters as active")
 @app_commands.describe(char_name="Name of the character to activate")
 async def xp_active(interaction: discord.Interaction, char_name: str):
     user_id = str(interaction.user.id)
@@ -231,7 +232,6 @@ async def xp_active(interaction: discord.Interaction, char_name: str):
         await interaction.response.send_message("❌ You have no characters to activate.", ephemeral=True)
         return
 
-    # Fuzzy match if exact name isn't found
     if char_name not in chars:
         matches = difflib.get_close_matches(char_name, chars.keys(), n=1, cutoff=0.6)
         if not matches:
@@ -242,6 +242,7 @@ async def xp_active(interaction: discord.Interaction, char_name: str):
     xp_data[user_id]["active"] = char_name
     save_xp(xp_data)
     await interaction.response.send_message(f"🟢 '{char_name}' is now your active character.", ephemeral=True)
+    print("✅ Registered: xp_active")
 
 @bot.tree.command(name="xp_list")
 async def xp_list(interaction: discord.Interaction):
@@ -328,13 +329,18 @@ async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
     save_xp(xp_data)
     await interaction.response.send_message(f"✅ Timezone set to {timezone}.", ephemeral=True)
 
+@bot.tree.command(name="xp_sync")
+async def xp_sync(interaction: discord.Interaction):
+    guild = discord.Object(id=GUILD_ID)
+    await bot.tree.sync(guild=guild)
+    await interaction.response.send_message("🔁 Slash commands re-synced to this server.", ephemeral=True)
+
 @bot.tree.command(name="xp_help")
 async def xp_help(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 XP Bot Help", description="Slash commands to manage your XP and characters:")
     embed.add_field(name="/xp_create", value="Create a new character.", inline=False)
     embed.add_field(name="/xp_active", value="Set which character is active.", inline=False)
-    embed.add_field(name="/xp_me", value="View your active or named character.", inline=False)
-    embed.add_field(name="/xp", value="Check XP for a character.", inline=False)
+    embed.add_field(name="/xp", value="View your active or named character.", inline=False)
     embed.add_field(name="/xp_list", value="List all your characters.", inline=False)
     embed.add_field(name="/xp_delete", value="Delete a character.", inline=False)
     embed.add_field(name="/xp_enable / /xp_disable", value="Enable or disable XP tracking in a channel.", inline=False)
