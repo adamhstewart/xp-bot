@@ -8,12 +8,13 @@ from discord.ext import commands
 from discord import app_commands
 
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
-
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 XP_FILE = "xp.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
+intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # XP/Level config
@@ -23,9 +24,13 @@ LEVEL_THRESHOLDS = [
 ]
 
 DEFAULT_CONFIG = {
-    "xp_channels": [],
-    "char_per_xp": 240,
-    "daily_xp_cap": 5
+    "rp_channels": [],
+    "char_per_rp": 240,
+    "daily_rp_cap": 5,
+    "hf_channels": [],
+    "hf_attempt_xp": 1,
+    "hf_success_xp": 5,
+    "daily_hf_cap": 5
 }
 
 def load_xp():
@@ -52,9 +57,20 @@ def ensure_user(user_id):
             "characters": {},
             "char_buffer": 0,
             "daily_xp": 0,
+            "daily_hf": 0,
             "last_xp_reset": "",
             "timezone": "UTC"
         }
+def award_xp(user_id, amount):
+    ensure_user(user_id)
+    active = xp_data[user_id]["active"]
+    if active:
+        chars = xp_data[user_id]["characters"]
+        if active in chars:
+            chars[active]["xp"] += amount
+        else:
+            chars[active] = {"xp": amount}
+    save_xp(xp_data)
 
 def has_role(user, allowed_roles):
     """Return True if user has at least one allowed role name."""
@@ -88,64 +104,156 @@ def should_reset_xp(user_data):
     today_local = user_time.date().isoformat()
     return user_data.get("last_xp_reset") != today_local
 
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send("🏓 Pong!")
+@bot.command(name="sync")
+async def sync(ctx):
+    if not ctx.guild:
+        await ctx.send("This command must be run in a server.")
+        return
 
-@bot.command(name="sync_commands")
-async def sync_commands(ctx):
-    await ctx.send("👋 Sync command was triggered!")
-    guild = discord.Object(id=GUILD_ID)
+    guild = ctx.guild
     synced = await bot.tree.sync(guild=guild)
-    await ctx.send(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+    await ctx.send(f"✅ Synced {len(synced)} commands to guild `{guild.name}` ({guild.id})")
 
 @bot.event
 async def on_ready():
-    print(f"{bot.user.name} is online.")
+    print(f"✅ {bot.user.name} is online.")
 
-    # Optional: Print registered slash commands for debug
-    for command in bot.tree.get_commands():
-        print(f"📦 Loaded command: /{command.name}")
+    env = os.getenv("ENV", "prod")
+    guild_id = os.getenv("GUILD_ID")
 
+    if env == "dev" and guild_id:
+        print("🔧 Environment: development")
+        guild = discord.Object(id=int(guild_id))
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced)} slash commands to dev guild {guild_id}")
+    else:
+        print("🚀 Environment: production")
+        synced = await bot.tree.sync()
+        print(f"🌍 Synced {len(synced)} global slash commands")
+
+    print("📦 Slash commands:")
+    for cmd in bot.tree.get_commands():
+        print(f" - /{cmd.name}")
+
+# on_message() checks each message to see if it should be awarded RP or HF XP.
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    if message.author.bot and message.embeds and message.channel.id in xp_data.get("hf_channels", []):
+        embed = message.embeds[0]
+        title = embed.title.lower() if embed.title else ""
+        description = embed.description.lower() if embed.description else ""
+        field_texts = " ".join(f"{field.name.lower()} {field.value.lower()}" for field in embed.fields)
+        combined_text = f"{title} {description} {field_texts}"
 
-    channel_id = message.channel.id
-    if channel_id not in xp_data.get("xp_channels", []):
-        return
+        print(f"📨 HF Embed Detected in #{getattr(message.channel, 'name', 'DM')} by {getattr(message.author, 'display_name', str(message.author))}")
+        print(f"Title: {title}")
+        print(f"Description: {description}")
 
-    user_id = str(message.author.id)
-    ensure_user(user_id)
+        is_hunting = "goes hunting" in combined_text
+        is_foraging = "goes foraging" in combined_text
+        is_success = "time to harvest" in combined_text or "time to gut and harvest" in combined_text
 
-    user_data = xp_data[user_id]
-    if should_reset_xp(user_data):
-        user_data["daily_xp"] = 0
+        print(f"🧐 Hunting: {is_hunting}, Foraging: {is_foraging}, Success: {is_success}")
+
+        if is_hunting or is_foraging:
+            char_name = embed.title.split(" goes ")[0].strip().lower()
+            print(f"🔍 Trying to match character name: '{char_name}'")
+
+            matched_user_id = None
+            for user_id, user_info in xp_data.items():
+                if not isinstance(user_info, dict) or "characters" not in user_info:
+                    continue
+                for existing_char in user_info.get("characters", {}):
+                    if existing_char.lower().startswith(char_name):
+                        matched_user_id = user_id
+                        break
+                if matched_user_id:
+                    break
+
+            if not matched_user_id:
+                print("❌ No matching user found for character name.")
+                return
+
+            ensure_user(matched_user_id)
+            user_data = xp_data[matched_user_id]
+
+            # Normalize char name
+            matched_char_name = None
+            for existing_char in user_data["characters"]:
+                if existing_char.lower().startswith(char_name):
+                    matched_char_name = existing_char
+                    break
+
+            if not matched_char_name:
+                print("❌ Matched user found but character not found in user's list.")
+                return
+
+            char_data = user_data["characters"].get(matched_char_name, {})
+            char_data.setdefault("xp", 0)
+            char_data.setdefault("daily_hf", 0)
+
+            if char_data["daily_hf"] >= xp_data.get("daily_hf_cap", 5):
+                print(f"⚠️ Character '{matched_char_name}' has reached daily HF cap.")
+                return
+
+            base_xp = xp_data.get("hf_attempt_xp", 1)
+            bonus = xp_data.get("hf_success_xp", 5) if is_success else 0
+            xp_award = min(base_xp + bonus, xp_data["daily_hf_cap"] - char_data["daily_hf"])
+
+            char_data["xp"] += xp_award
+            char_data["daily_hf"] += xp_award
+            user_data["characters"][matched_char_name] = char_data
+
+            save_xp(xp_data)
+            print(f"✅ Awarded {xp_award} XP to character '{matched_char_name}' (HF)")
+
+    elif not message.author.bot and message.channel.id in xp_data.get("rp_channels", []):
+        user_id = str(message.author.id)
+        ensure_user(user_id)
+
+        user_data = xp_data[user_id]
+        now_utc = datetime.utcnow()
+        tz = user_data.get("timezone", "UTC")
         try:
-            tz = ZoneInfo(user_data.get("timezone", "UTC"))
-            user_data["last_xp_reset"] = datetime.utcnow().astimezone(tz).date().isoformat()
+            user_time = now_utc.astimezone(ZoneInfo(tz))
         except:
-            user_data["last_xp_reset"] = datetime.utcnow().date().isoformat()
+            user_time = now_utc
+        today = user_time.date().isoformat()
 
-    active = user_data["active"]
-    if not active or active not in user_data["characters"]:
-        return
+        if user_data.get("last_xp_reset") != today:
+            for char in user_data["characters"].values():
+                char["daily_xp"] = 0
+                char["char_buffer"] = 0
+                char["daily_hf"] = 0
+            user_data["last_xp_reset"] = today
 
-    buffer = user_data.get("char_buffer", 0)
-    buffer += len(message.content)
+        active = user_data.get("active")
+        if not active or active not in user_data.get("characters", {}):
+            return
 
-    char_per_xp = xp_data.get("char_per_xp", 240)
-    potential_xp = buffer // char_per_xp
-    xp_remaining = xp_data.get("daily_xp_cap", 5) - user_data["daily_xp"]
-    gained_xp = min(potential_xp, xp_remaining)
+        char_data = user_data["characters"].get(active, {})
+        char_data.setdefault("xp", 0)
+        char_data.setdefault("daily_xp", 0)
+        char_data.setdefault("char_buffer", 0)
 
-    user_data["char_buffer"] = buffer % char_per_xp
+        char_data["char_buffer"] += len(message.content)
 
-    if gained_xp > 0:
-        user_data["daily_xp"] += gained_xp
-        user_data["characters"][active]["xp"] += gained_xp
+        char_per_rp = xp_data.get("char_per_rp", 240)
+        potential_xp = char_data["char_buffer"] // char_per_rp
+        xp_remaining = xp_data.get("daily_rp_cap", 5) - char_data["daily_xp"]
+        gained_xp = min(potential_xp, xp_remaining)
+
+        char_data["char_buffer"] = char_data["char_buffer"] % char_per_rp
+
+        if gained_xp > 0:
+            char_data["xp"] += gained_xp
+            char_data["daily_xp"] += gained_xp
+
+        user_data["characters"][active] = char_data
         save_xp(xp_data)
+
+    await bot.process_commands(message)
 
 # SLASH COMMANDS
 @bot.tree.command(name="xp", description="View XP, level, and progress for a character")
@@ -197,11 +305,9 @@ async def xp_create(interaction: discord.Interaction, char_name: str, image_url:
         msg = f"❌ Character '{char_name}' already exists."
     else:
         xp_data[user_id]["characters"][char_name] = {"xp": 0, "image_url": image_url or ""}
-        if not xp_data[user_id]["active"]:
-            xp_data[user_id]["active"] = char_name
+        xp_data[user_id]["active"] = char_name  # Always set the new one as active
         save_xp(xp_data)
         msg = f"✅ Character '{char_name}' created and set as active."
-
     await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="xp_delete")
@@ -220,6 +326,42 @@ async def xp_delete(interaction: discord.Interaction, name: str):
 
     save_xp(xp_data)
     await interaction.response.send_message(f"🗑️ Deleted character '{name}'.", ephemeral=True)
+
+@bot.tree.command(name="xp_grant", description="Grant XP to a character")
+@app_commands.describe(
+    character_name="Name of the character to grant XP to",
+    amount="Amount of XP to grant"
+)
+async def xp_grant(interaction: discord.Interaction, character_name: str, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Only admins can use this command.", ephemeral=True)
+        return
+
+    found_user = None
+    found_char = None
+
+    for user_id, user_data in xp_data.items():
+        if not isinstance(user_data, dict):
+            continue
+        for name in user_data.get("characters", {}):
+            if name.lower().startswith(character_name.lower()):
+                found_user = user_id
+                found_char = name
+                break
+        if found_user:
+            break
+
+    if not found_user or not found_char:
+        await interaction.response.send_message("❌ Character not found.", ephemeral=True)
+        return
+
+    xp_data[found_user]["characters"][found_char]["xp"] += amount
+    save_xp(xp_data)
+
+    await interaction.response.send_message(
+        f"✅ Granted {amount} XP to **{found_char}** (user ID: {found_user}).",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="xp_active", description="Set one of your characters as active")
 @app_commands.describe(char_name="Name of the character to activate")
@@ -242,7 +384,6 @@ async def xp_active(interaction: discord.Interaction, char_name: str):
     xp_data[user_id]["active"] = char_name
     save_xp(xp_data)
     await interaction.response.send_message(f"🟢 '{char_name}' is now your active character.", ephemeral=True)
-    print("✅ Registered: xp_active")
 
 @bot.tree.command(name="xp_list")
 async def xp_list(interaction: discord.Interaction):
@@ -262,35 +403,80 @@ async def xp_list(interaction: discord.Interaction):
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-@bot.tree.command(name="xp_enable")
-@app_commands.describe(channel="Channel to enable XP tracking")
-async def xp_enable(interaction: discord.Interaction, channel: discord.TextChannel):
+@bot.tree.command(name="xp_add_rp_channel")
+@app_commands.describe(channel="Channel to enable for RP XP tracking")
+async def xp_add_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    if channel.id not in xp_data["xp_channels"]:
-        xp_data["xp_channels"].append(channel.id)
+    cid = channel.id
+    if cid not in xp_data["rp_channels"]:
+        xp_data["rp_channels"].append(cid)
         save_xp(xp_data)
+        await interaction.response.send_message(f"✅ Channel {channel.mention} added for RP XP tracking.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Channel {channel.mention} already tracked for RP.", ephemeral=True)
 
-    await interaction.response.send_message(f"✅ XP tracking enabled in {channel.mention}.", ephemeral=True)
-
-@bot.tree.command(name="xp_disable")
-@app_commands.describe(channel="Channel to disable XP tracking")
-async def xp_disable(interaction: discord.Interaction, channel: discord.TextChannel):
+@bot.tree.command(name="xp_remove_rp_channel")
+@app_commands.describe(channel="Channel to disable RP tracking")
+async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    if channel.id in xp_data["xp_channels"]:
-        xp_data["xp_channels"].remove(channel.id)
+    if channel.id in xp_data["rp_channels"]:
+        xp_data["rp_channels"].remove(channel.id)
         save_xp(xp_data)
 
-    await interaction.response.send_message(f"🚫 XP tracking disabled in {channel.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"🚫 RP XP tracking disabled in {channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="xp_add_hf_channel")
+@app_commands.describe(channel="Channel to enable for hunting/foraging XP tracking")
+async def xp_add_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+
+    cid = channel.id
+    if cid not in xp_data["hf_channels"]:
+        xp_data["hf_channels"].append(cid)
+        save_xp(xp_data)
+        await interaction.response.send_message(f"✅ Channel {channel.mention} added for hunting/foraging XP tracking.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Channel {channel.mention} already tracked for HF.", ephemeral=True)
+
+@bot.tree.command(name="xp_remove_hf_channel")
+@app_commands.describe(channel="Channel to disable HF tracking")
+async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+
+    if channel.id in xp_data["hf_channels"]:
+        xp_data["hf_channels"].remove(channel.id)
+        save_xp(xp_data)
+
+    await interaction.response.send_message(f"🚫 HF XP tracking disabled in {channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="xp_config_hf")
+@app_commands.describe(attempt_xp="XP per attempt", success_xp="XP per success", daily_cap="Max XP from HF per day")
+async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, success_xp: int, daily_cap: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+
+    xp_data["hf_attempt_xp"] = attempt_xp
+    xp_data["hf_success_xp"] = success_xp
+    xp_data["daily_hf_cap"] = daily_cap
+    save_xp(xp_data)
+    await interaction.response.send_message(
+        f"✅ HF XP updated: {attempt_xp}/attempt, {success_xp}/success, daily cap: {daily_cap}.", ephemeral=True
+    )
 
 @bot.tree.command(name="xp_tracking")
 async def xp_tracking(interaction: discord.Interaction):
-    channel_ids = xp_data.get("xp_channels", [])
+    channel_ids = xp_data.get("rp_channels", [])
     if not channel_ids:
         await interaction.response.send_message("No channels have XP tracking enabled.", ephemeral=True)
         return
@@ -309,7 +495,7 @@ async def xp_set_cap(interaction: discord.Interaction, amount: int):
         await interaction.response.send_message("❌ Cap must be at least 1.", ephemeral=True)
         return
 
-    xp_data["daily_xp_cap"] = amount
+    xp_data["daily_rp_cap"] = amount
     save_xp(xp_data)
     await interaction.response.send_message(f"✅ Daily XP cap set to {amount}.", ephemeral=True)
 
@@ -348,6 +534,104 @@ async def xp_help(interaction: discord.Interaction):
     embed.add_field(name="/xp_set_cap", value="(Admin) Set the daily XP cap.", inline=False)
     embed.add_field(name="/xp_set_timezone", value="Set your personal XP reset timezone.", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# UI components
+class XPSettingsModal(discord.ui.Modal, title="Configure RP Settings"):
+    char_per_rp = discord.ui.TextInput(label="Characters per XP (RP)", placeholder="240", required=True)
+    daily_rp_cap = discord.ui.TextInput(label="Daily RP XP Cap", placeholder="5", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            xp_data["char_per_rp"] = int(self.char_per_rp.value)
+            xp_data["daily_rp_cap"] = int(self.daily_rp_cap.value)
+            save_xp(xp_data)
+            await interaction.response.send_message("✅ RP settings updated.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter valid numbers.", ephemeral=True)
+
+class HFSettingsModal(discord.ui.Modal, title="Configure HF Settings"):
+    hf_attempt_xp = discord.ui.TextInput(label="XP per attempt", placeholder="1", required=True)
+    hf_success_xp = discord.ui.TextInput(label="XP per success", placeholder="5", required=True)
+    daily_hf_cap = discord.ui.TextInput(label="Daily HF XP Cap", placeholder="5", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            xp_data["hf_attempt_xp"] = int(self.hf_attempt_xp.value)
+            xp_data["hf_success_xp"] = int(self.hf_success_xp.value)
+            xp_data["daily_hf_cap"] = int(self.daily_hf_cap.value)
+            save_xp(xp_data)
+            await interaction.response.send_message("✅ HF settings updated.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter valid numbers.", ephemeral=True)
+
+class ChannelDropdown(discord.ui.Select):
+    def __init__(self, label, target_key):
+        self.target_key = target_key
+        options = [
+            discord.SelectOption(label=ch.name, value=str(ch.id))
+            for ch in bot.get_all_channels() if isinstance(ch, discord.TextChannel)
+        ]
+        super().__init__(
+            placeholder=f"Select {label} channels...",
+            min_values=0,
+            max_values=min(25, len(options)),
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        xp_data[self.target_key] = [int(v) for v in self.values]
+        save_xp(xp_data)
+        await interaction.response.send_message(f"✅ Updated `{self.target_key}`.", ephemeral=True)
+
+class ChannelSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ChannelDropdown("RP", "rp_channels"))
+        self.add_item(ChannelDropdown("HF", "hf_channels"))
+
+class XPSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="RP Settings", style=discord.ButtonStyle.primary)
+    async def rp_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(XPSettingsModal())
+
+    @discord.ui.button(label="HF Settings", style=discord.ButtonStyle.primary)
+    async def hf_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(HFSettingsModal())
+
+    @discord.ui.button(label="Channel Settings", style=discord.ButtonStyle.secondary)
+    async def channel_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Choose channels to enable XP tracking:", view=ChannelSettingsView(), ephemeral=True)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Settings view closed.", ephemeral=True)
+        self.stop()
+
+@bot.command(name="xpsettings")
+async def xpsettings(ctx):
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Admin only.")
+        return
+
+    rp_channels = ", ".join(f"<#{cid}>" for cid in xp_data.get("rp_channels", [])) or "None"
+    hf_channels = ", ".join(f"<#{cid}>" for cid in xp_data.get("hf_channels", [])) or "None"
+
+    embed = discord.Embed(title="XP Bot Settings Overview")
+    embed.add_field(name="RP Settings", value=f"Channels: {rp_channels}\nChars per XP: {xp_data['char_per_rp']}\nDaily RP Cap: {xp_data['daily_rp_cap']}", inline=False)
+    embed.add_field(name="HF Settings", value=f"Channels: {hf_channels}\nXP per Attempt: {xp_data['hf_attempt_xp']}\nXP per Success: {xp_data['hf_success_xp']}\nDaily HF Cap: {xp_data['daily_hf_cap']}", inline=False)
+
+    await ctx.send(embed=embed, view=XPSettingsView())
+
+# Ignore unknown commands
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # Silently ignore unknown commands
+    else:
+        raise error
 
 if __name__ == "__main__":
     bot.run(TOKEN)
