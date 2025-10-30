@@ -204,42 +204,37 @@ async def on_message(message):
 @bot.tree.command(name="xp", description="View XP, level, and progress for a character")
 @app_commands.describe(char_name="Optional character name (defaults to active)")
 async def xp(interaction: discord.Interaction, char_name: str = None):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
 
-    characters = await db.list_characters(user_id)
+    characters = xp_data[user_id]["characters"]
     if not characters:
-        await interaction.response.send_message("❌ You don't have any characters yet.", ephemeral=True)
+        await interaction.response.send_message("❌ You don’t have any characters yet.", ephemeral=True)
         return
 
     if not char_name:
-        active_char = await db.get_active_character(user_id)
-        if not active_char:
+        char_name = xp_data[user_id]["active"]
+        if not char_name:
             await interaction.response.send_message("❌ No active character. Use `/xp_active` to set one.", ephemeral=True)
             return
-        char = active_char
-    else:
-        # Try exact match first
-        char = await db.get_character(user_id, char_name)
 
-        # If not found, try fuzzy match
-        if not char:
-            char_names = [c['name'] for c in characters]
-            matches = difflib.get_close_matches(char_name, char_names, n=1, cutoff=0.6)
-            if not matches:
-                await interaction.response.send_message(f"❌ Character '{char_name}' not found.", ephemeral=True)
-                return
-            char = await db.get_character(user_id, matches[0])
+    if char_name not in characters:
+        matches = difflib.get_close_matches(char_name, characters.keys(), n=1, cutoff=0.6)
+        if not matches:
+            await interaction.response.send_message(f"❌ Character '{char_name}' not found.", ephemeral=True)
+            return
+        char_name = matches[0]
 
-    xp_amount = char["xp"]
-    level, progress, required = get_level_and_progress(xp_amount)
+    char = characters[char_name]
+    xp = char["xp"]
+    level, progress, required = get_level_and_progress(xp)
 
-    desc = f"XP: {xp_amount}\nLevel: {level}"
+    desc = f"XP: {xp}\nLevel: {level}"
     if progress is not None:
         bar = int((progress / required) * 20)
         desc += f"\nProgress: `[{'█'*bar}{'-'*(20-bar)}] {progress}/{required}`"
 
-    embed = discord.Embed(title=char['name'], description=desc)
+    embed = discord.Embed(title=char_name, description=desc)
     if char.get("image_url"):
         embed.set_image(url=char["image_url"])
 
@@ -248,33 +243,33 @@ async def xp(interaction: discord.Interaction, char_name: str = None):
 @bot.tree.command(name="xp_create", description="Create a new character")
 @app_commands.describe(char_name="Character name", image_url="Optional image URL")
 async def xp_create(interaction: discord.Interaction, char_name: str, image_url: str = None):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
 
-    # Check if character already exists
-    existing = await db.get_character(user_id, char_name)
-    if existing:
-        await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
-        return
-
-    # Create character
-    try:
-        await db.create_character(user_id, char_name, image_url)
-        await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error creating character: {str(e)}", ephemeral=True)
+    if char_name in xp_data[user_id]["characters"]:
+        msg = f"❌ Character '{char_name}' already exists."
+    else:
+        xp_data[user_id]["characters"][char_name] = {"xp": 0, "image_url": image_url or ""}
+        xp_data[user_id]["active"] = char_name  # Always set the new one as active
+        save_xp(xp_data)
+        msg = f"✅ Character '{char_name}' created and set as active."
+    await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="xp_delete")
 @app_commands.describe(name="Character name to delete")
 async def xp_delete(interaction: discord.Interaction, name: str):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
 
-    deleted = await db.delete_character(user_id, name)
-    if not deleted:
+    if name not in xp_data[user_id]["characters"]:
         await interaction.response.send_message("❌ Character not found.", ephemeral=True)
         return
 
+    del xp_data[user_id]["characters"][name]
+    if xp_data[user_id]["active"] == name:
+        xp_data[user_id]["active"] = next(iter(xp_data[user_id]["characters"]), None)
+
+    save_xp(xp_data)
     await interaction.response.send_message(f"🗑️ Deleted character '{name}'.", ephemeral=True)
 
 @bot.tree.command(name="xp_grant", description="Grant XP to a character")
@@ -287,68 +282,69 @@ async def xp_grant(interaction: discord.Interaction, character_name: str, amount
         await interaction.response.send_message("❌ Only admins can use this command.", ephemeral=True)
         return
 
-    # Find character across all users
-    result = await db.find_character_by_name_any_user(character_name)
+    found_user = None
+    found_char = None
 
-    if not result:
+    for user_id, user_data in xp_data.items():
+        if not isinstance(user_data, dict):
+            continue
+        for name in user_data.get("characters", {}):
+            if name.lower().startswith(character_name.lower()):
+                found_user = user_id
+                found_char = name
+                break
+        if found_user:
+            break
+
+    if not found_user or not found_char:
         await interaction.response.send_message("❌ Character not found.", ephemeral=True)
         return
 
-    user_id, char_data = result
-    char_name = char_data['name']
-
-    # Award XP (bypassing daily caps since this is admin grant)
-    await db.award_xp(user_id, char_name, amount)
+    xp_data[found_user]["characters"][found_char]["xp"] += amount
+    save_xp(xp_data)
 
     await interaction.response.send_message(
-        f"✅ Granted {amount} XP to **{char_name}** (user ID: {user_id}).",
+        f"✅ Granted {amount} XP to **{found_char}** (user ID: {found_user}).",
         ephemeral=True
     )
 
 @bot.tree.command(name="xp_active", description="Set one of your characters as active")
 @app_commands.describe(char_name="Name of the character to activate")
 async def xp_active(interaction: discord.Interaction, char_name: str):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
 
-    chars = await db.list_characters(user_id)
+    chars = xp_data[user_id]["characters"]
     if not chars:
         await interaction.response.send_message("❌ You have no characters to activate.", ephemeral=True)
         return
 
-    # Try exact match first
-    char_names = [c['name'] for c in chars]
-    matched_name = char_name
-
-    if char_name not in char_names:
-        # Try fuzzy match
-        matches = difflib.get_close_matches(char_name, char_names, n=1, cutoff=0.6)
+    if char_name not in chars:
+        matches = difflib.get_close_matches(char_name, chars.keys(), n=1, cutoff=0.6)
         if not matches:
             await interaction.response.send_message(f"❌ No character found matching '{char_name}'.", ephemeral=True)
             return
-        matched_name = matches[0]
+        char_name = matches[0]
 
-    # Set as active
-    await db.set_active_character(user_id, matched_name)
-    await interaction.response.send_message(f"🟢 '{matched_name}' is now your active character.", ephemeral=True)
+    xp_data[user_id]["active"] = char_name
+    save_xp(xp_data)
+    await interaction.response.send_message(f"🟢 '{char_name}' is now your active character.", ephemeral=True)
 
 @bot.tree.command(name="xp_list")
 async def xp_list(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
-
-    chars = await db.list_characters(user_id)
-    active_char = await db.get_active_character(user_id)
-    active_name = active_char['name'] if active_char else None
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
+    chars = xp_data[user_id]["characters"]
+    active = xp_data[user_id]["active"]
 
     if not chars:
         await interaction.response.send_message("You have no characters.", ephemeral=True)
         return
 
     lines = []
-    for char in chars:
-        mark = "🟢" if char['name'] == active_name else "⚪"
-        lines.append(f"{mark} {char['name']} — {char['xp']} XP")
+    for name, data in chars.items():
+        mark = "🟢" if name == active else "⚪"
+        lines.append(f"{mark} {name} — {data['xp']} XP")
 
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -359,8 +355,13 @@ async def xp_add_rp_channel(interaction: discord.Interaction, channel: discord.T
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    await db.add_rp_channel(GUILD_ID, channel.id)
-    await interaction.response.send_message(f"✅ Channel {channel.mention} added for RP XP tracking.", ephemeral=True)
+    cid = channel.id
+    if cid not in xp_data["rp_channels"]:
+        xp_data["rp_channels"].append(cid)
+        save_xp(xp_data)
+        await interaction.response.send_message(f"✅ Channel {channel.mention} added for RP XP tracking.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Channel {channel.mention} already tracked for RP.", ephemeral=True)
 
 @bot.tree.command(name="xp_remove_rp_channel")
 @app_commands.describe(channel="Channel to disable RP tracking")
@@ -369,7 +370,10 @@ async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discor
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    await db.remove_rp_channel(GUILD_ID, channel.id)
+    if channel.id in xp_data["rp_channels"]:
+        xp_data["rp_channels"].remove(channel.id)
+        save_xp(xp_data)
+
     await interaction.response.send_message(f"🚫 RP XP tracking disabled in {channel.mention}.", ephemeral=True)
 
 @bot.tree.command(name="xp_add_hf_channel")
@@ -379,17 +383,25 @@ async def xp_add_hf_channel(interaction: discord.Interaction, channel: discord.T
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    await db.add_hf_channel(GUILD_ID, channel.id)
-    await interaction.response.send_message(f"✅ Channel {channel.mention} added for hunting/foraging XP tracking.", ephemeral=True)
+    cid = channel.id
+    if cid not in xp_data["hf_channels"]:
+        xp_data["hf_channels"].append(cid)
+        save_xp(xp_data)
+        await interaction.response.send_message(f"✅ Channel {channel.mention} added for hunting/foraging XP tracking.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"ℹ️ Channel {channel.mention} already tracked for HF.", ephemeral=True)
 
 @bot.tree.command(name="xp_remove_hf_channel")
 @app_commands.describe(channel="Channel to disable HF tracking")
-async def xp_remove_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    await db.remove_hf_channel(GUILD_ID, channel.id)
+    if channel.id in xp_data["hf_channels"]:
+        xp_data["hf_channels"].remove(channel.id)
+        save_xp(xp_data)
+
     await interaction.response.send_message(f"🚫 HF XP tracking disabled in {channel.mention}.", ephemeral=True)
 
 @bot.tree.command(name="xp_config_hf")
@@ -399,21 +411,17 @@ async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, succes
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    await db.update_config(
-        GUILD_ID,
-        hf_attempt_xp=attempt_xp,
-        hf_success_xp=success_xp,
-        daily_hf_cap=daily_cap
-    )
+    xp_data["hf_attempt_xp"] = attempt_xp
+    xp_data["hf_success_xp"] = success_xp
+    xp_data["daily_hf_cap"] = daily_cap
+    save_xp(xp_data)
     await interaction.response.send_message(
         f"✅ HF XP updated: {attempt_xp}/attempt, {success_xp}/success, daily cap: {daily_cap}.", ephemeral=True
     )
 
 @bot.tree.command(name="xp_tracking")
 async def xp_tracking(interaction: discord.Interaction):
-    config = await db.get_config(GUILD_ID)
-    channel_ids = config.get("rp_channels", [])
-
+    channel_ids = xp_data.get("rp_channels", [])
     if not channel_ids:
         await interaction.response.send_message("No channels have XP tracking enabled.", ephemeral=True)
         return
@@ -432,14 +440,15 @@ async def xp_set_cap(interaction: discord.Interaction, amount: int):
         await interaction.response.send_message("❌ Cap must be at least 1.", ephemeral=True)
         return
 
-    await db.update_config(GUILD_ID, daily_rp_cap=amount)
+    xp_data["daily_rp_cap"] = amount
+    save_xp(xp_data)
     await interaction.response.send_message(f"✅ Daily XP cap set to {amount}.", ephemeral=True)
 
 @bot.tree.command(name="xp_set_timezone")
 @app_commands.describe(timezone="Your timezone, e.g. America/New_York")
 async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
-    user_id = interaction.user.id
-    await db.ensure_user(user_id)
+    user_id = str(interaction.user.id)
+    ensure_user(user_id)
 
     try:
         ZoneInfo(timezone)
@@ -447,7 +456,8 @@ async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
         await interaction.response.send_message("❌ Invalid timezone.", ephemeral=True)
         return
 
-    await db.set_user_timezone(user_id, timezone)
+    xp_data[user_id]["timezone"] = timezone
+    save_xp(xp_data)
     await interaction.response.send_message(f"✅ Timezone set to {timezone}.", ephemeral=True)
 
 @bot.tree.command(name="xp_sync")
@@ -464,7 +474,7 @@ async def xp_help(interaction: discord.Interaction):
     embed.add_field(name="/xp", value="View your active or named character.", inline=False)
     embed.add_field(name="/xp_list", value="List all your characters.", inline=False)
     embed.add_field(name="/xp_delete", value="Delete a character.", inline=False)
-    embed.add_field(name="/xp_add_rp_channel / /xp_remove_rp_channel", value="Enable or disable RP XP tracking in a channel.", inline=False)
+    embed.add_field(name="/xp_enable / /xp_disable", value="Enable or disable XP tracking in a channel.", inline=False)
     embed.add_field(name="/xp_tracking", value="List channels where XP tracking is enabled.", inline=False)
     embed.add_field(name="/xp_set_cap", value="(Admin) Set the daily XP cap.", inline=False)
     embed.add_field(name="/xp_set_timezone", value="Set your personal XP reset timezone.", inline=False)
@@ -477,11 +487,9 @@ class XPSettingsModal(discord.ui.Modal, title="Configure RP Settings"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            await db.update_config(
-                GUILD_ID,
-                char_per_rp=int(self.char_per_rp.value),
-                daily_rp_cap=int(self.daily_rp_cap.value)
-            )
+            xp_data["char_per_rp"] = int(self.char_per_rp.value)
+            xp_data["daily_rp_cap"] = int(self.daily_rp_cap.value)
+            save_xp(xp_data)
             await interaction.response.send_message("✅ RP settings updated.", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Please enter valid numbers.", ephemeral=True)
@@ -493,12 +501,10 @@ class HFSettingsModal(discord.ui.Modal, title="Configure HF Settings"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            await db.update_config(
-                GUILD_ID,
-                hf_attempt_xp=int(self.hf_attempt_xp.value),
-                hf_success_xp=int(self.hf_success_xp.value),
-                daily_hf_cap=int(self.daily_hf_cap.value)
-            )
+            xp_data["hf_attempt_xp"] = int(self.hf_attempt_xp.value)
+            xp_data["hf_success_xp"] = int(self.hf_success_xp.value)
+            xp_data["daily_hf_cap"] = int(self.daily_hf_cap.value)
+            save_xp(xp_data)
             await interaction.response.send_message("✅ HF settings updated.", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Please enter valid numbers.", ephemeral=True)
@@ -518,11 +524,8 @@ class ChannelDropdown(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        channel_ids = [int(v) for v in self.values]
-        if self.target_key == "rp_channels":
-            await db.update_config(GUILD_ID, rp_channels=channel_ids)
-        elif self.target_key == "hf_channels":
-            await db.update_config(GUILD_ID, hf_channels=channel_ids)
+        xp_data[self.target_key] = [int(v) for v in self.values]
+        save_xp(xp_data)
         await interaction.response.send_message(f"✅ Updated `{self.target_key}`.", ephemeral=True)
 
 class ChannelSettingsView(discord.ui.View):
@@ -558,13 +561,12 @@ async def xpsettings(ctx):
         await ctx.send("❌ Admin only.")
         return
 
-    config = await db.get_config(GUILD_ID)
-    rp_channels = ", ".join(f"<#{cid}>" for cid in config.get("rp_channels", [])) or "None"
-    hf_channels = ", ".join(f"<#{cid}>" for cid in config.get("hf_channels", [])) or "None"
+    rp_channels = ", ".join(f"<#{cid}>" for cid in xp_data.get("rp_channels", [])) or "None"
+    hf_channels = ", ".join(f"<#{cid}>" for cid in xp_data.get("hf_channels", [])) or "None"
 
     embed = discord.Embed(title="XP Bot Settings Overview")
-    embed.add_field(name="RP Settings", value=f"Channels: {rp_channels}\nChars per XP: {config['char_per_rp']}\nDaily RP Cap: {config['daily_rp_cap']}", inline=False)
-    embed.add_field(name="HF Settings", value=f"Channels: {hf_channels}\nXP per Attempt: {config['hf_attempt_xp']}\nXP per Success: {config['hf_success_xp']}\nDaily HF Cap: {config['daily_hf_cap']}", inline=False)
+    embed.add_field(name="RP Settings", value=f"Channels: {rp_channels}\nChars per XP: {xp_data['char_per_rp']}\nDaily RP Cap: {xp_data['daily_rp_cap']}", inline=False)
+    embed.add_field(name="HF Settings", value=f"Channels: {hf_channels}\nXP per Attempt: {xp_data['hf_attempt_xp']}\nXP per Success: {xp_data['hf_success_xp']}\nDaily HF Cap: {xp_data['daily_hf_cap']}", inline=False)
 
     await ctx.send(embed=embed, view=XPSettingsView())
 
