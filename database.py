@@ -289,7 +289,8 @@ class Database:
 
     async def find_character_by_name_any_user(self, name: str) -> Optional[Tuple[int, Dict]]:
         """Find character by name across all users (for HF tracking)
-        Returns (user_id, character_dict) or None"""
+        Returns (user_id, character_dict) or None
+        DEPRECATED: Use find_all_characters_by_name() for collision-safe lookups"""
         async with self.pool.acquire() as conn:
             char = await conn.fetchrow(
                 "SELECT * FROM characters WHERE name = $1 LIMIT 1",
@@ -298,6 +299,16 @@ class Database:
             if char:
                 return (char['user_id'], dict(char))
             return None
+
+    async def find_all_characters_by_name(self, name: str) -> List[Tuple[int, Dict]]:
+        """Find all characters with given name across all users (for HF tracking)
+        Returns list of (user_id, character_dict) tuples"""
+        async with self.pool.acquire() as conn:
+            chars = await conn.fetch(
+                "SELECT * FROM characters WHERE name = $1",
+                name
+            )
+            return [(char['user_id'], dict(char)) for char in chars]
 
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,

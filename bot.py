@@ -261,14 +261,42 @@ async def on_message(message):
             char_name = embed.title.split(" goes ")[0].strip()
             logger.debug(f"Trying to match character name: '{char_name}'")
 
-            # Try to find character in database (case-insensitive prefix match)
-            result = await db.find_character_by_name_any_user(char_name)
+            # Find all characters with this name
+            matches = await db.find_all_characters_by_name(char_name)
 
-            if not result:
+            if not matches:
                 logger.warning(f"No matching character found for HF activity: '{char_name}'")
                 return
 
-            user_id, char_data = result
+            # Disambiguate if multiple matches
+            if len(matches) == 1:
+                user_id, char_data = matches[0]
+                logger.debug(f"Single match found for '{char_name}': user {user_id}")
+            else:
+                logger.warning(f"Multiple characters named '{char_name}' found ({len(matches)} matches)")
+
+                # Try to disambiguate using message mentions
+                mentioned_user_ids = [mention.id for mention in message.mentions]
+
+                if mentioned_user_ids:
+                    logger.debug(f"Checking {len(mentioned_user_ids)} mentioned users for disambiguation")
+                    matching_mentions = [(uid, cdata) for uid, cdata in matches if uid in mentioned_user_ids]
+
+                    if len(matching_mentions) == 1:
+                        user_id, char_data = matching_mentions[0]
+                        logger.info(f"Disambiguated '{char_name}' using mention: user {user_id}")
+                    elif len(matching_mentions) > 1:
+                        logger.warning(f"Multiple mentioned users have characters named '{char_name}'. Skipping XP award.")
+                        return
+                    else:
+                        logger.warning(f"No mentioned users have a character named '{char_name}'. Skipping XP award.")
+                        return
+                else:
+                    # No mentions to help disambiguate
+                    logger.warning(f"Cannot disambiguate character '{char_name}' - no user mentions in message. Skipping XP award.")
+                    logger.debug(f"Conflicting user IDs: {[uid for uid, _ in matches]}")
+                    return
+
             char_name_actual = char_data['name']
 
             # Check daily HF cap
