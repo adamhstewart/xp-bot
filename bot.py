@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo, available_timezones
 import difflib
@@ -6,6 +7,19 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from database import Database
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO if os.getenv("ENV") == "prod" else logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('xp-bot')
+
+# Reduce discord.py logging noise
+logging.getLogger('discord').setLevel(logging.WARNING)
+logging.getLogger('discord.http').setLevel(logging.WARNING)
+logging.getLogger('discord.gateway').setLevel(logging.INFO)
 
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -85,7 +99,7 @@ async def sync(ctx):
 
 @bot.event
 async def on_ready():
-    print(f"✅ {bot.user.name} is online.")
+    logger.info(f"Bot '{bot.user.name}' is online")
 
     # Connect to database
     await db.connect()
@@ -95,19 +109,19 @@ async def on_ready():
     guild_id = os.getenv("GUILD_ID")
 
     if env == "dev" and guild_id:
-        print("🔧 Environment: development")
+        logger.info("Environment: development")
         guild = discord.Object(id=int(guild_id))
         bot.tree.copy_global_to(guild=guild)
         synced = await bot.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced)} slash commands to dev guild {guild_id}")
+        logger.info(f"Synced {len(synced)} slash commands to dev guild {guild_id}")
     else:
-        print("🚀 Environment: production")
+        logger.info("Environment: production")
         synced = await bot.tree.sync()
-        print(f"🌍 Synced {len(synced)} global slash commands")
+        logger.info(f"Synced {len(synced)} global slash commands")
 
-    print("📦 Slash commands:")
+    logger.info("Available slash commands:")
     for cmd in bot.tree.get_commands():
-        print(f" - /{cmd.name}")
+        logger.info(f"  /{cmd.name}")
 
 # on_message() checks each message to see if it should be awarded RP or HF XP.
 @bot.event
@@ -121,25 +135,25 @@ async def on_message(message):
         field_texts = " ".join(f"{field.name.lower()} {field.value.lower()}" for field in embed.fields)
         combined_text = f"{title} {description} {field_texts}"
 
-        print(f"📨 HF Embed Detected in #{getattr(message.channel, 'name', 'DM')} by {getattr(message.author, 'display_name', str(message.author))}")
-        print(f"Title: {title}")
-        print(f"Description: {description}")
+        logger.debug(f"HF Embed detected in #{getattr(message.channel, 'name', 'DM')} by {getattr(message.author, 'display_name', str(message.author))}")
+        logger.debug(f"Embed title: {title}")
+        logger.debug(f"Embed description: {description}")
 
         is_hunting = "goes hunting" in combined_text
         is_foraging = "goes foraging" in combined_text
         is_success = "time to harvest" in combined_text or "time to gut and harvest" in combined_text
 
-        print(f"🧐 Hunting: {is_hunting}, Foraging: {is_foraging}, Success: {is_success}")
+        logger.debug(f"Hunting: {is_hunting}, Foraging: {is_foraging}, Success: {is_success}")
 
         if is_hunting or is_foraging:
             char_name = embed.title.split(" goes ")[0].strip()
-            print(f"🔍 Trying to match character name: '{char_name}'")
+            logger.debug(f"Trying to match character name: '{char_name}'")
 
             # Try to find character in database (case-insensitive prefix match)
             result = await db.find_character_by_name_any_user(char_name)
 
             if not result:
-                print("❌ No matching character found in database.")
+                logger.warning(f"No matching character found for HF activity: '{char_name}'")
                 return
 
             user_id, char_data = result
@@ -147,7 +161,7 @@ async def on_message(message):
 
             # Check daily HF cap
             if char_data['daily_hf'] >= config.get('daily_hf_cap', 5):
-                print(f"⚠️ Character '{char_name_actual}' has reached daily HF cap.")
+                logger.debug(f"Character '{char_name_actual}' has reached daily HF cap")
                 return
 
             # Calculate XP award
@@ -158,7 +172,7 @@ async def on_message(message):
             # Award XP
             await db.award_xp(user_id, char_name_actual, xp_award, daily_hf_delta=xp_award)
 
-            print(f"✅ Awarded {xp_award} XP to character '{char_name_actual}' (HF)")
+            logger.info(f"Awarded {xp_award} HF XP to '{char_name_actual}' (user {user_id})")
 
     elif not message.author.bot and message.channel.id in config.get("rp_channels", []):
         user_id = message.author.id

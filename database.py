@@ -2,9 +2,12 @@
 Database layer for XP Bot using asyncpg
 """
 import os
+import logging
 import asyncpg
 from datetime import date
 from typing import Optional, Dict, List, Tuple
+
+logger = logging.getLogger('xp-bot.database')
 
 
 class Database:
@@ -15,26 +18,30 @@ class Database:
         """Initialize database connection pool"""
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
+            logger.error("DATABASE_URL environment variable not set")
             raise ValueError("DATABASE_URL environment variable not set")
 
+        logger.debug(f"Connecting to database (pool size: 2-10)")
         self.pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
-        print(f"✅ Database connected")
+        logger.info("Database connected successfully")
 
     async def close(self):
         """Close database connection pool"""
         if self.pool:
             await self.pool.close()
-            print("Database connection closed")
+            logger.info("Database connection closed")
 
     async def initialize_schema(self):
         """Create tables if they don't exist"""
         schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+        logger.debug(f"Loading schema from {schema_path}")
+
         with open(schema_path, 'r') as f:
             schema_sql = f.read()
 
         async with self.pool.acquire() as conn:
             await conn.execute(schema_sql)
-        print("✅ Database schema initialized")
+        logger.info("Database schema initialized")
 
     # ==================== CONFIG METHODS ====================
 
@@ -178,21 +185,29 @@ class Database:
         """Create a new character, returns character ID"""
         await self.ensure_user(user_id)
 
-        async with self.pool.acquire() as conn:
-            char_id = await conn.fetchval("""
-                INSERT INTO characters (user_id, name, image_url, xp, daily_xp, daily_hf, char_buffer)
-                VALUES ($1, $2, $3, 0, 0, 0, 0)
-                RETURNING id
-            """, user_id, name, image_url)
+        try:
+            async with self.pool.acquire() as conn:
+                char_id = await conn.fetchval("""
+                    INSERT INTO characters (user_id, name, image_url, xp, daily_xp, daily_hf, char_buffer)
+                    VALUES ($1, $2, $3, 0, 0, 0, 0)
+                    RETURNING id
+                """, user_id, name, image_url)
 
-            # Set as active character if user has no active character
-            await conn.execute("""
-                UPDATE users
-                SET active_character_id = $2, updated_at = NOW()
-                WHERE user_id = $1 AND active_character_id IS NULL
-            """, user_id, char_id)
+                # Set as active character if user has no active character
+                await conn.execute("""
+                    UPDATE users
+                    SET active_character_id = $2, updated_at = NOW()
+                    WHERE user_id = $1 AND active_character_id IS NULL
+                """, user_id, char_id)
 
-            return char_id
+                logger.info(f"Created character '{name}' (ID: {char_id}) for user {user_id}")
+                return char_id
+        except asyncpg.UniqueViolationError:
+            logger.warning(f"Duplicate character name '{name}' for user {user_id}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to create character '{name}' for user {user_id}: {e}")
+            raise
 
     async def delete_character(self, user_id: int, name: str) -> bool:
         """Delete a character, returns True if deleted"""
@@ -288,16 +303,23 @@ class Database:
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,
                        char_buffer_delta: int = 0):
         """Award XP to a character and update daily counters"""
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE characters
-                SET xp = xp + $3,
-                    daily_xp = daily_xp + $4,
-                    daily_hf = daily_hf + $5,
-                    char_buffer = char_buffer + $6,
-                    updated_at = NOW()
-                WHERE user_id = $1 AND name = $2
-            """, user_id, char_name, xp_amount, daily_xp_delta, daily_hf_delta, char_buffer_delta)
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.execute("""
+                    UPDATE characters
+                    SET xp = xp + $3,
+                        daily_xp = daily_xp + $4,
+                        daily_hf = daily_hf + $5,
+                        char_buffer = char_buffer + $6,
+                        updated_at = NOW()
+                    WHERE user_id = $1 AND name = $2
+                """, user_id, char_name, xp_amount, daily_xp_delta, daily_hf_delta, char_buffer_delta)
+
+                if xp_amount > 0:
+                    logger.debug(f"Awarded {xp_amount} XP to '{char_name}' (user {user_id})")
+        except Exception as e:
+            logger.error(f"Failed to award XP to '{char_name}' for user {user_id}: {e}")
+            raise
 
     async def reset_daily_caps(self, user_id: int):
         """Reset daily XP caps for all user's characters"""
