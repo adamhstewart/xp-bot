@@ -4,6 +4,12 @@ Error handlers for XP Bot
 import logging
 from discord.ext import commands
 from discord import app_commands
+from utils.exceptions import (
+    DatabaseError,
+    DatabaseConnectionError,
+    CharacterError,
+    XPBotError
+)
 
 logger = logging.getLogger('xp-bot')
 
@@ -14,6 +20,10 @@ def setup_error_handlers(bot):
     @bot.tree.error
     async def on_app_command_error(interaction, error: app_commands.AppCommandError):
         """Handle errors from slash commands"""
+        # Unwrap the actual error if it's wrapped in CommandInvokeError
+        if isinstance(error, app_commands.CommandInvokeError):
+            error = error.original
+
         if isinstance(error, app_commands.CommandOnCooldown):
             # Rate limit hit
             minutes, seconds = divmod(int(error.retry_after), 60)
@@ -27,6 +37,7 @@ def setup_error_handlers(bot):
                 ephemeral=True
             )
             logger.debug(f"Rate limit hit by user {interaction.user.id} on /{interaction.command.name}")
+
         elif isinstance(error, app_commands.CheckFailure):
             # Permission check failed or other check
             await interaction.response.send_message(
@@ -34,19 +45,52 @@ def setup_error_handlers(bot):
                 ephemeral=True
             )
             logger.warning(f"Permission denied for user {interaction.user.id} on /{interaction.command.name}")
+
+        elif isinstance(error, DatabaseConnectionError):
+            # Database connection issues
+            logger.error(f"Database connection error in /{interaction.command.name}: {error}")
+            await interaction.response.send_message(
+                "⚠️ Unable to connect to database. Please try again in a few moments.",
+                ephemeral=True
+            )
+
+        elif isinstance(error, DatabaseError):
+            # General database errors
+            logger.error(f"Database error in /{interaction.command.name}: {error}")
+            await interaction.response.send_message(
+                "⚠️ Database temporarily unavailable. Please try again in a moment.",
+                ephemeral=True
+            )
+
+        elif isinstance(error, CharacterError):
+            # Character-specific errors (already handled in commands, but catch here too)
+            logger.warning(f"Character error in /{interaction.command.name}: {error}")
+            await interaction.response.send_message(
+                f"❌ {str(error)}",
+                ephemeral=True
+            )
+
+        elif isinstance(error, XPBotError):
+            # Other custom errors
+            logger.error(f"XP Bot error in /{interaction.command.name}: {error}")
+            await interaction.response.send_message(
+                f"❌ {str(error)}",
+                ephemeral=True
+            )
+
         else:
-            # Other errors - log and show generic message
-            logger.error(f"Error in /{interaction.command.name}: {error}", exc_info=True)
+            # Unexpected errors - log and show generic message
+            logger.error(f"Unexpected error in /{interaction.command.name}: {error}", exc_info=True)
             try:
                 await interaction.response.send_message(
-                    "❌ An error occurred while processing your command. Please try again later.",
+                    "❌ An unexpected error occurred. Please try again later.",
                     ephemeral=True
                 )
             except:
                 # Response already sent, try followup
                 try:
                     await interaction.followup.send(
-                        "❌ An error occurred while processing your command.",
+                        "❌ An unexpected error occurred.",
                         ephemeral=True
                     )
                 except:

@@ -6,6 +6,14 @@ import logging
 import asyncpg
 from datetime import date
 from typing import Optional, Dict, List, Tuple
+from utils.exceptions import (
+    DatabaseConnectionError,
+    DatabaseTimeoutError,
+    DatabaseError,
+    CharacterNotFoundError,
+    DuplicateCharacterError
+)
+from utils.retry import retry_on_db_error
 
 logger = logging.getLogger('xp-bot.database')
 
@@ -19,11 +27,29 @@ class Database:
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
             logger.error("DATABASE_URL environment variable not set")
-            raise ValueError("DATABASE_URL environment variable not set")
+            raise DatabaseConnectionError("DATABASE_URL environment variable not set")
 
-        logger.debug(f"Connecting to database (pool size: 2-10)")
-        self.pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
-        logger.info("Database connected successfully")
+        try:
+            logger.debug(f"Connecting to database (pool size: 2-10)")
+            self.pool = await asyncpg.create_pool(
+                database_url,
+                min_size=2,
+                max_size=10,
+                command_timeout=60
+            )
+            logger.info("Database connected successfully")
+        except asyncpg.InvalidCatalogNameError as e:
+            logger.error(f"Database does not exist: {e}")
+            raise DatabaseConnectionError(f"Database does not exist: {e}") from e
+        except asyncpg.InvalidPasswordError as e:
+            logger.error(f"Invalid database credentials: {e}")
+            raise DatabaseConnectionError(f"Invalid database credentials") from e
+        except asyncpg.CannotConnectNowError as e:
+            logger.error(f"Database is not accepting connections: {e}")
+            raise DatabaseConnectionError(f"Database is not ready") from e
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise DatabaseConnectionError(f"Database connection failed: {e}") from e
 
     async def close(self):
         """Close database connection pool"""
@@ -31,17 +57,28 @@ class Database:
             await self.pool.close()
             logger.info("Database connection closed")
 
+    @retry_on_db_error(max_attempts=3, delay=1.0)
     async def initialize_schema(self):
         """Create tables if they don't exist"""
-        schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
-        logger.debug(f"Loading schema from {schema_path}")
+        try:
+            schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+            logger.debug(f"Loading schema from {schema_path}")
 
-        with open(schema_path, 'r') as f:
-            schema_sql = f.read()
+            with open(schema_path, 'r') as f:
+                schema_sql = f.read()
 
-        async with self.pool.acquire() as conn:
-            await conn.execute(schema_sql)
-        logger.info("Database schema initialized")
+            async with self.pool.acquire() as conn:
+                await conn.execute(schema_sql)
+            logger.info("Database schema initialized")
+        except FileNotFoundError:
+            logger.error(f"Schema file not found: {schema_path}")
+            raise DatabaseError(f"Schema file not found") from None
+        except asyncpg.PostgresError as e:
+            logger.error(f"Failed to initialize schema: {e}")
+            raise DatabaseError(f"Failed to initialize database schema") from e
+        except Exception as e:
+            logger.error(f"Unexpected error initializing schema: {e}")
+            raise DatabaseError(f"Database initialization failed") from e
 
     # ==================== CONFIG METHODS ====================
 
@@ -181,6 +218,7 @@ class Database:
 
     # ==================== CHARACTER METHODS ====================
 
+    @retry_on_db_error(max_attempts=2)
     async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None) -> int:
         """Create a new character, returns character ID"""
         await self.ensure_user(user_id)
@@ -204,10 +242,13 @@ class Database:
                 return char_id
         except asyncpg.UniqueViolationError:
             logger.warning(f"Duplicate character name '{name}' for user {user_id}")
-            raise
+            raise DuplicateCharacterError(name, user_id) from None
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error creating character '{name}' for user {user_id}: {e}")
+            raise DatabaseError(f"Failed to create character") from e
         except Exception as e:
-            logger.error(f"Failed to create character '{name}' for user {user_id}: {e}")
-            raise
+            logger.error(f"Unexpected error creating character '{name}' for user {user_id}: {e}")
+            raise DatabaseError(f"Failed to create character") from e
 
     async def delete_character(self, user_id: int, name: str) -> bool:
         """Delete a character, returns True if deleted"""
@@ -310,6 +351,7 @@ class Database:
             )
             return [(char['user_id'], dict(char)) for char in chars]
 
+    @retry_on_db_error(max_attempts=3)
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,
                        char_buffer_delta: int = 0):
@@ -328,9 +370,12 @@ class Database:
 
                 if xp_amount > 0:
                     logger.debug(f"Awarded {xp_amount} XP to '{char_name}' (user {user_id})")
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error awarding XP to '{char_name}' for user {user_id}: {e}")
+            raise DatabaseError(f"Failed to award XP") from e
         except Exception as e:
-            logger.error(f"Failed to award XP to '{char_name}' for user {user_id}: {e}")
-            raise
+            logger.error(f"Unexpected error awarding XP to '{char_name}' for user {user_id}: {e}")
+            raise DatabaseError(f"Failed to award XP") from e
 
     async def reset_daily_caps(self, user_id: int):
         """Reset daily XP caps for all user's characters"""

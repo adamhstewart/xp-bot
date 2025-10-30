@@ -7,6 +7,11 @@ import discord
 from discord import app_commands
 from utils.xp import get_level_and_progress
 from utils.validation import validate_character_name, validate_image_url
+from utils.exceptions import (
+    DatabaseError,
+    CharacterNotFoundError,
+    DuplicateCharacterError
+)
 
 logger = logging.getLogger('xp-bot')
 
@@ -93,9 +98,20 @@ def setup_character_commands(bot, db):
         try:
             await db.create_character(user_id, char_name, image_url)
             await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
+        except DuplicateCharacterError:
+            await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
+        except DatabaseError as e:
+            logger.error(f"Database error creating character '{char_name}' for user {user_id}: {e}")
+            await interaction.response.send_message(
+                "⚠️ Database temporarily unavailable. Please try again in a moment.",
+                ephemeral=True
+            )
         except Exception as e:
-            logger.error(f"Error creating character '{char_name}' for user {user_id}: {e}")
-            await interaction.response.send_message(f"❌ Error creating character: {str(e)}", ephemeral=True)
+            logger.error(f"Unexpected error creating character '{char_name}' for user {user_id}: {e}")
+            await interaction.response.send_message(
+                "❌ An unexpected error occurred. Please try again later.",
+                ephemeral=True
+            )
 
     @bot.tree.command(name="xp_delete")
     @app_commands.describe(name="Character name to delete")
