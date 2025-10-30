@@ -119,3 +119,29 @@ def validate_image_url(url: str) -> tuple[bool, str]:
         return False, "URL is too long (max 2000 characters)."
 
     return True, ""
+
+
+def validate_character_sheet_url(url: str) -> tuple[bool, str]:
+    """
+    Validate character sheet URL (basic validation).
+    Returns (is_valid, error_message)
+    """
+    if not url:
+        return True, ""  # Optional field
+
+    # Use the same URL validation pattern
+    url_pattern = re.compile(
+        r'^https?://'  # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
+        r'localhost|'  # localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+        r'(?::\d+)?'  # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+    if not url_pattern.match(url):
+        return False, "Invalid URL format. Must start with http:// or https://"
+
+    if len(url) > 2000:
+        return False, "URL is too long (max 2000 characters)."
+
+    return True, ""

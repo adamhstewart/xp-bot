@@ -219,17 +219,17 @@ class Database:
     # ==================== CHARACTER METHODS ====================
 
     @retry_on_db_error(max_attempts=2)
-    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None) -> int:
+    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None, character_sheet_url: Optional[str] = None) -> int:
         """Create a new character, returns character ID"""
         await self.ensure_user(user_id)
 
         try:
             async with self.pool.acquire() as conn:
                 char_id = await conn.fetchval("""
-                    INSERT INTO characters (user_id, name, image_url, xp, daily_xp, daily_hf, char_buffer)
-                    VALUES ($1, $2, $3, 0, 0, 0, 0)
+                    INSERT INTO characters (user_id, name, image_url, character_sheet_url, xp, daily_xp, daily_hf, char_buffer)
+                    VALUES ($1, $2, $3, $4, 0, 0, 0, 0)
                     RETURNING id
-                """, user_id, name, image_url)
+                """, user_id, name, image_url, character_sheet_url)
 
                 # Set as active character if user has no active character
                 await conn.execute("""
@@ -351,6 +351,24 @@ class Database:
             )
             return [(char['user_id'], dict(char)) for char in chars]
 
+    async def search_all_character_names(self, search: str = "", limit: int = 25) -> List[str]:
+        """Search for character names across all users (for autocomplete)
+        Returns list of character names matching search term"""
+        async with self.pool.acquire() as conn:
+            if search:
+                # Case-insensitive search
+                chars = await conn.fetch(
+                    "SELECT DISTINCT name FROM characters WHERE LOWER(name) LIKE LOWER($1) ORDER BY name LIMIT $2",
+                    f"%{search}%", limit
+                )
+            else:
+                # Return most recently updated characters if no search
+                chars = await conn.fetch(
+                    "SELECT DISTINCT name FROM characters ORDER BY updated_at DESC LIMIT $1",
+                    limit
+                )
+            return [row['name'] for row in chars]
+
     @retry_on_db_error(max_attempts=3)
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,
@@ -397,3 +415,62 @@ class Database:
                 SET char_buffer = $3, updated_at = NOW()
                 WHERE user_id = $1 AND name = $2
             """, user_id, char_name, new_buffer)
+
+    async def update_character(self, user_id: int, old_name: str, new_name: Optional[str] = None,
+                              image_url: Optional[str] = None, character_sheet_url: Optional[str] = None) -> bool:
+        """Update character details (name, image_url, character_sheet_url)
+        Returns True if successful, False if character not found
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                # Get the character first to check if it exists
+                char = await conn.fetchrow(
+                    "SELECT id FROM characters WHERE user_id = $1 AND name = $2",
+                    user_id, old_name
+                )
+
+                if not char:
+                    return False
+
+                # Build dynamic update based on what's provided
+                updates = []
+                params = [user_id, old_name]
+                param_idx = 3
+
+                if new_name is not None:
+                    updates.append(f"name = ${param_idx}")
+                    params.append(new_name)
+                    param_idx += 1
+
+                if image_url is not None:
+                    updates.append(f"image_url = ${param_idx}")
+                    params.append(image_url)
+                    param_idx += 1
+
+                if character_sheet_url is not None:
+                    updates.append(f"character_sheet_url = ${param_idx}")
+                    params.append(character_sheet_url)
+                    param_idx += 1
+
+                # Always update timestamp
+                updates.append("updated_at = NOW()")
+
+                if len(updates) == 1:  # Only timestamp, nothing to update
+                    return True
+
+                query = f"""
+                    UPDATE characters
+                    SET {', '.join(updates)}
+                    WHERE user_id = $1 AND name = $2
+                """
+
+                await conn.execute(query, *params)
+                logger.info(f"Updated character '{old_name}' for user {user_id}")
+                return True
+
+        except asyncpg.UniqueViolationError:
+            logger.warning(f"Cannot rename '{old_name}' to '{new_name}' - name already exists for user {user_id}")
+            raise DuplicateCharacterError(new_name, user_id) from None
+        except asyncpg.PostgresError as e:
+            logger.error(f"Database error updating character '{old_name}' for user {user_id}: {e}")
+            raise DatabaseError(f"Failed to update character") from e
