@@ -1,6 +1,6 @@
 # XP Bot
 
-A Discord bot for role-playing communities to track experience points (XP) from RP messages and hunting/foraging activities.
+A Discord bot for role-playing communities to track experience points (XP) from RP messages and other activities.
 
 Built with Python, Discord.py, and PostgreSQL.
 
@@ -360,19 +360,9 @@ python migrate_to_postgres.py
 - `char_buffer` - Partial XP accumulator
 - `image_url` - Character image
 
-### Key Features
-
-- **ACID Transactions** - No data corruption from concurrent writes
-- **Foreign Keys** - Proper relationships with CASCADE deletes
-- **Constraints** - Prevents duplicate character names per user
-- **Indexed Queries** - Fast character lookups
-- **Connection Pooling** - Efficient database connections (2-10 pool size)
-
----
+#---
 
 ## Code Structure
-
-The bot is organized into clean, maintainable modules:
 
 ```
 xp-bot/
@@ -394,14 +384,6 @@ xp-bot/
     ├── xp.py                 # XP calculations (59 lines)
     └── permissions.py        # Permission checks (8 lines)
 ```
-
-### Architecture Benefits
-
-- **Modular:** Each file is 50-180 lines (easy to understand)
-- **Separation of Concerns:** Commands, handlers, UI, and utils are separate
-- **Testable:** Functions can be tested in isolation
-- **Scalable:** Easy to add new commands without cluttering main file
-- **Maintainable:** Find and modify specific functionality quickly
 
 ---
 
@@ -542,14 +524,6 @@ If upgrading from an older version that used `xp.json`:
    - View character: `/xp`
    - Send RP message to verify XP tracking
 
-### Migration Benefits
-
-- ✅ **No data corruption** from concurrent writes
-- ✅ **Automatic backups** (with Fly Postgres)
-- ✅ **10x faster** character lookups (indexed queries)
-- ✅ **Transaction safety** for all updates
-- ✅ **Proper relationships** with foreign keys
-- ✅ **Scalable** to thousands of users
 
 ---
 
@@ -588,13 +562,16 @@ If upgrading from an older version that used `xp.json`:
 
 ## License
 
-[Add your license here]
+XP-Bot: Discord XP Tracking Bot
+Copyright (c) 2025 Adam Stewart
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0)
+You may obtain a copy of the License at https://www.gnu.org/licenses/agpl-3.0.en.html
+
 
 ## Support
 
 - Report issues: [GitHub Issues](https://github.com/your-repo/issues)
 - Documentation: This README
-- Discord: [Your support server]
 
 ---
 
