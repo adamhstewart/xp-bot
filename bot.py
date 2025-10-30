@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-XP Bot - Discord bot for tracking RP and HF XP
+XP-Bot: Discord XP Tracking Bot
 Main entry point that initializes bot and registers all commands/handlers
+
+# Copyright (c) 2025 Adam Stewart
+# Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0)
+# You may obtain a copy of the License at https://www.gnu.org/licenses/agpl-3.0.en.html
 """
 import os
 import logging
