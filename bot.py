@@ -217,6 +217,7 @@ async def on_message(message):
 # SLASH COMMANDS
 @bot.tree.command(name="xp", description="View XP, level, and progress for a character")
 @app_commands.describe(char_name="Optional character name (defaults to active)")
+@app_commands.checks.cooldown(3, 10.0, key=lambda i: i.user.id)
 async def xp(interaction: discord.Interaction, char_name: str = None):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -261,6 +262,7 @@ async def xp(interaction: discord.Interaction, char_name: str = None):
 
 @bot.tree.command(name="xp_create", description="Create a new character")
 @app_commands.describe(char_name="Character name", image_url="Optional image URL")
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
 async def xp_create(interaction: discord.Interaction, char_name: str, image_url: str = None):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -280,6 +282,7 @@ async def xp_create(interaction: discord.Interaction, char_name: str, image_url:
 
 @bot.tree.command(name="xp_delete")
 @app_commands.describe(name="Character name to delete")
+@app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
 async def xp_delete(interaction: discord.Interaction, name: str):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -296,6 +299,7 @@ async def xp_delete(interaction: discord.Interaction, name: str):
     character_name="Name of the character to grant XP to",
     amount="Amount of XP to grant"
 )
+@app_commands.checks.cooldown(10, 60.0, key=lambda i: i.user.id)
 async def xp_grant(interaction: discord.Interaction, character_name: str, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Only admins can use this command.", ephemeral=True)
@@ -321,6 +325,7 @@ async def xp_grant(interaction: discord.Interaction, character_name: str, amount
 
 @bot.tree.command(name="xp_active", description="Set one of your characters as active")
 @app_commands.describe(char_name="Name of the character to activate")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
 async def xp_active(interaction: discord.Interaction, char_name: str):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -347,6 +352,7 @@ async def xp_active(interaction: discord.Interaction, char_name: str):
     await interaction.response.send_message(f"🟢 '{matched_name}' is now your active character.", ephemeral=True)
 
 @bot.tree.command(name="xp_list")
+@app_commands.checks.cooldown(3, 30.0, key=lambda i: i.user.id)
 async def xp_list(interaction: discord.Interaction):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -368,6 +374,7 @@ async def xp_list(interaction: discord.Interaction):
 
 @bot.tree.command(name="xp_add_rp_channel")
 @app_commands.describe(channel="Channel to enable for RP XP tracking")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
 async def xp_add_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -378,6 +385,7 @@ async def xp_add_rp_channel(interaction: discord.Interaction, channel: discord.T
 
 @bot.tree.command(name="xp_remove_rp_channel")
 @app_commands.describe(channel="Channel to disable RP tracking")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
 async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -388,6 +396,7 @@ async def xp_remove_rp_channel(interaction: discord.Interaction, channel: discor
 
 @bot.tree.command(name="xp_add_hf_channel")
 @app_commands.describe(channel="Channel to enable for hunting/foraging XP tracking")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
 async def xp_add_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -398,6 +407,7 @@ async def xp_add_hf_channel(interaction: discord.Interaction, channel: discord.T
 
 @bot.tree.command(name="xp_remove_hf_channel")
 @app_commands.describe(channel="Channel to disable HF tracking")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
 async def xp_remove_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -408,6 +418,7 @@ async def xp_remove_hf_channel(interaction: discord.Interaction, channel: discor
 
 @bot.tree.command(name="xp_config_hf")
 @app_commands.describe(attempt_xp="XP per attempt", success_xp="XP per success", daily_cap="Max XP from HF per day")
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
 async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, success_xp: int, daily_cap: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -424,6 +435,7 @@ async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, succes
     )
 
 @bot.tree.command(name="xp_tracking")
+@app_commands.checks.cooldown(1, 60.0, key=lambda i: i.user.id)
 async def xp_tracking(interaction: discord.Interaction):
     config = await db.get_config(GUILD_ID)
     channel_ids = config.get("rp_channels", [])
@@ -437,6 +449,7 @@ async def xp_tracking(interaction: discord.Interaction):
 
 @bot.tree.command(name="xp_set_cap")
 @app_commands.describe(amount="New daily XP cap")
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
 async def xp_set_cap(interaction: discord.Interaction, amount: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
@@ -451,6 +464,7 @@ async def xp_set_cap(interaction: discord.Interaction, amount: int):
 
 @bot.tree.command(name="xp_set_timezone")
 @app_commands.describe(timezone="Your timezone, e.g. America/New_York")
+@app_commands.checks.cooldown(1, 300.0, key=lambda i: i.user.id)
 async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
     user_id = interaction.user.id
     await db.ensure_user(user_id)
@@ -465,12 +479,14 @@ async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
     await interaction.response.send_message(f"✅ Timezone set to {timezone}.", ephemeral=True)
 
 @bot.tree.command(name="xp_sync")
+@app_commands.checks.cooldown(1, 300.0, key=lambda i: i.user.id)
 async def xp_sync(interaction: discord.Interaction):
     guild = discord.Object(id=GUILD_ID)
     await bot.tree.sync(guild=guild)
     await interaction.response.send_message("🔁 Slash commands re-synced to this server.", ephemeral=True)
 
 @bot.tree.command(name="xp_help")
+@app_commands.checks.cooldown(1, 60.0, key=lambda i: i.user.id)
 async def xp_help(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 XP Bot Help", description="Slash commands to manage your XP and characters:")
     embed.add_field(name="/xp_create", value="Create a new character.", inline=False)
@@ -582,12 +598,55 @@ async def xpsettings(ctx):
 
     await ctx.send(embed=embed, view=XPSettingsView())
 
-# Ignore unknown commands
+# Error handlers
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Handle errors from slash commands"""
+    if isinstance(error, app_commands.CommandOnCooldown):
+        # Rate limit hit
+        minutes, seconds = divmod(int(error.retry_after), 60)
+        if minutes > 0:
+            time_str = f"{minutes}m {seconds}s"
+        else:
+            time_str = f"{seconds}s"
+
+        await interaction.response.send_message(
+            f"⏱️ Slow down! You can use this command again in **{time_str}**.",
+            ephemeral=True
+        )
+        logger.debug(f"Rate limit hit by user {interaction.user.id} on /{interaction.command.name}")
+    elif isinstance(error, app_commands.CheckFailure):
+        # Permission check failed or other check
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this command.",
+            ephemeral=True
+        )
+        logger.warning(f"Permission denied for user {interaction.user.id} on /{interaction.command.name}")
+    else:
+        # Other errors - log and show generic message
+        logger.error(f"Error in /{interaction.command.name}: {error}", exc_info=True)
+        try:
+            await interaction.response.send_message(
+                "❌ An error occurred while processing your command. Please try again later.",
+                ephemeral=True
+            )
+        except:
+            # Response already sent, try followup
+            try:
+                await interaction.followup.send(
+                    "❌ An error occurred while processing your command.",
+                    ephemeral=True
+                )
+            except:
+                pass  # Nothing we can do
+
 @bot.event
 async def on_command_error(ctx, error):
+    """Handle errors from traditional prefix commands"""
     if isinstance(error, commands.CommandNotFound):
         return  # Silently ignore unknown commands
     else:
+        logger.error(f"Error in !{ctx.command}: {error}", exc_info=True)
         raise error
 
 if __name__ == "__main__":
