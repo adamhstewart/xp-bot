@@ -39,9 +39,121 @@ LEVEL_THRESHOLDS = [
     85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
 ]
 
+# Validation constants
+MAX_CHARACTER_NAME_LENGTH = 100
+MIN_CHARACTER_NAME_LENGTH = 1
+MAX_XP_GRANT = 1000000  # 1 million max XP per grant
+MIN_XP_GRANT = -100000  # Allow removing up to 100k XP
+MAX_DAILY_CAP = 1000
+MIN_DAILY_CAP = 1
+MAX_CHAR_PER_RP = 10000
+MIN_CHAR_PER_RP = 1
+
 def has_role(user, allowed_roles):
     """Return True if user has at least one allowed role name."""
     return any(role.name in allowed_roles for role in getattr(user, 'roles', []))
+
+def validate_character_name(name: str) -> tuple[bool, str]:
+    """
+    Validate character name.
+    Returns (is_valid, error_message)
+    """
+    if not name or not name.strip():
+        return False, "Character name cannot be empty."
+
+    name = name.strip()
+
+    if len(name) < MIN_CHARACTER_NAME_LENGTH:
+        return False, f"Character name must be at least {MIN_CHARACTER_NAME_LENGTH} character."
+
+    if len(name) > MAX_CHARACTER_NAME_LENGTH:
+        return False, f"Character name cannot exceed {MAX_CHARACTER_NAME_LENGTH} characters."
+
+    # Check for valid characters (alphanumeric, spaces, basic punctuation)
+    import re
+    if not re.match(r'^[a-zA-Z0-9\s\-\'\.]+$', name):
+        return False, "Character name can only contain letters, numbers, spaces, hyphens, apostrophes, and periods."
+
+    return True, ""
+
+def validate_xp_amount(amount: int, allow_negative: bool = False) -> tuple[bool, str]:
+    """
+    Validate XP amount.
+    Returns (is_valid, error_message)
+    """
+    if not allow_negative and amount < 0:
+        return False, "XP amount cannot be negative."
+
+    if amount < MIN_XP_GRANT:
+        return False, f"XP amount cannot be less than {MIN_XP_GRANT}."
+
+    if amount > MAX_XP_GRANT:
+        return False, f"XP amount cannot exceed {MAX_XP_GRANT:,}."
+
+    return True, ""
+
+def validate_daily_cap(cap: int) -> tuple[bool, str]:
+    """
+    Validate daily cap value.
+    Returns (is_valid, error_message)
+    """
+    if cap < MIN_DAILY_CAP:
+        return False, f"Daily cap must be at least {MIN_DAILY_CAP}."
+
+    if cap > MAX_DAILY_CAP:
+        return False, f"Daily cap cannot exceed {MAX_DAILY_CAP}."
+
+    return True, ""
+
+def validate_char_per_rp(amount: int) -> tuple[bool, str]:
+    """
+    Validate characters per RP XP value.
+    Returns (is_valid, error_message)
+    """
+    if amount < MIN_CHAR_PER_RP:
+        return False, f"Characters per XP must be at least {MIN_CHAR_PER_RP}."
+
+    if amount > MAX_CHAR_PER_RP:
+        return False, f"Characters per XP cannot exceed {MAX_CHAR_PER_RP}."
+
+    return True, ""
+
+def validate_timezone(tz_string: str) -> tuple[bool, str]:
+    """
+    Validate timezone string.
+    Returns (is_valid, error_message)
+    """
+    try:
+        ZoneInfo(tz_string)
+        return True, ""
+    except Exception:
+        return False, f"Invalid timezone '{tz_string}'. Use format like 'America/New_York' or 'UTC'."
+
+def validate_image_url(url: str) -> tuple[bool, str]:
+    """
+    Validate image URL (basic validation).
+    Returns (is_valid, error_message)
+    """
+    if not url:
+        return True, ""  # Optional field
+
+    import re
+    # Basic URL pattern
+    url_pattern = re.compile(
+        r'^https?://'  # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
+        r'localhost|'  # localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+        r'(?::\d+)?'  # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+    if not url_pattern.match(url):
+        return False, "Invalid URL format. Must start with http:// or https://"
+
+    if len(url) > 2000:
+        return False, "URL is too long (max 2000 characters)."
+
+    return True, ""
 
 def get_level_and_progress(xp):
     level = 1
@@ -265,9 +377,26 @@ async def xp(interaction: discord.Interaction, char_name: str = None):
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
 async def xp_create(interaction: discord.Interaction, char_name: str, image_url: str = None):
     user_id = interaction.user.id
+
+    # Validate character name
+    is_valid, error_msg = validate_character_name(char_name)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
+        logger.debug(f"Invalid character name '{char_name}' from user {user_id}: {error_msg}")
+        return
+
+    # Validate image URL if provided
+    if image_url:
+        is_valid, error_msg = validate_image_url(image_url)
+        if not is_valid:
+            await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
+            logger.debug(f"Invalid image URL from user {user_id}: {error_msg}")
+            return
+
     await db.ensure_user(user_id)
 
     # Check if character already exists
+    char_name = char_name.strip()  # Use trimmed version
     existing = await db.get_character(user_id, char_name)
     if existing:
         await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
@@ -278,6 +407,7 @@ async def xp_create(interaction: discord.Interaction, char_name: str, image_url:
         await db.create_character(user_id, char_name, image_url)
         await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
     except Exception as e:
+        logger.error(f"Error creating character '{char_name}' for user {user_id}: {e}")
         await interaction.response.send_message(f"❌ Error creating character: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="xp_delete")
@@ -305,6 +435,13 @@ async def xp_grant(interaction: discord.Interaction, character_name: str, amount
         await interaction.response.send_message("❌ Only admins can use this command.", ephemeral=True)
         return
 
+    # Validate XP amount (allow negative for removing XP)
+    is_valid, error_msg = validate_xp_amount(amount, allow_negative=True)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
+        logger.debug(f"Invalid XP amount {amount} from admin {interaction.user.id}")
+        return
+
     # Find character across all users
     result = await db.find_character_by_name_any_user(character_name)
 
@@ -318,8 +455,9 @@ async def xp_grant(interaction: discord.Interaction, character_name: str, amount
     # Award XP (bypassing daily caps since this is admin grant)
     await db.award_xp(user_id, char_name, amount)
 
+    action = "Granted" if amount >= 0 else "Removed"
     await interaction.response.send_message(
-        f"✅ Granted {amount} XP to **{char_name}** (user ID: {user_id}).",
+        f"✅ {action} {abs(amount)} XP {'to' if amount >= 0 else 'from'} **{char_name}** (user ID: {user_id}).",
         ephemeral=True
     )
 
@@ -424,6 +562,23 @@ async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, succes
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
+    # Validate XP amounts (must be non-negative)
+    is_valid, error_msg = validate_xp_amount(attempt_xp)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ Attempt XP: {error_msg}", ephemeral=True)
+        return
+
+    is_valid, error_msg = validate_xp_amount(success_xp)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ Success XP: {error_msg}", ephemeral=True)
+        return
+
+    # Validate daily cap
+    is_valid, error_msg = validate_daily_cap(daily_cap)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ Daily cap: {error_msg}", ephemeral=True)
+        return
+
     await db.update_config(
         GUILD_ID,
         hf_attempt_xp=attempt_xp,
@@ -455,8 +610,11 @@ async def xp_set_cap(interaction: discord.Interaction, amount: int):
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
 
-    if amount < 1:
-        await interaction.response.send_message("❌ Cap must be at least 1.", ephemeral=True)
+    # Validate daily cap
+    is_valid, error_msg = validate_daily_cap(amount)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
+        logger.debug(f"Invalid daily cap {amount} from admin {interaction.user.id}")
         return
 
     await db.update_config(GUILD_ID, daily_rp_cap=amount)
@@ -467,14 +625,15 @@ async def xp_set_cap(interaction: discord.Interaction, amount: int):
 @app_commands.checks.cooldown(1, 300.0, key=lambda i: i.user.id)
 async def xp_set_timezone(interaction: discord.Interaction, timezone: str):
     user_id = interaction.user.id
-    await db.ensure_user(user_id)
 
-    try:
-        ZoneInfo(timezone)
-    except:
-        await interaction.response.send_message("❌ Invalid timezone.", ephemeral=True)
+    # Validate timezone
+    is_valid, error_msg = validate_timezone(timezone)
+    if not is_valid:
+        await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
+        logger.debug(f"Invalid timezone '{timezone}' from user {user_id}")
         return
 
+    await db.ensure_user(user_id)
     await db.set_user_timezone(user_id, timezone)
     await interaction.response.send_message(f"✅ Timezone set to {timezone}.", ephemeral=True)
 
@@ -507,10 +666,25 @@ class XPSettingsModal(discord.ui.Modal, title="Configure RP Settings"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            char_per_rp_val = int(self.char_per_rp.value)
+            daily_rp_cap_val = int(self.daily_rp_cap.value)
+
+            # Validate char_per_rp
+            is_valid, error_msg = validate_char_per_rp(char_per_rp_val)
+            if not is_valid:
+                await interaction.response.send_message(f"❌ Characters per XP: {error_msg}", ephemeral=True)
+                return
+
+            # Validate daily_rp_cap
+            is_valid, error_msg = validate_daily_cap(daily_rp_cap_val)
+            if not is_valid:
+                await interaction.response.send_message(f"❌ Daily RP cap: {error_msg}", ephemeral=True)
+                return
+
             await db.update_config(
                 GUILD_ID,
-                char_per_rp=int(self.char_per_rp.value),
-                daily_rp_cap=int(self.daily_rp_cap.value)
+                char_per_rp=char_per_rp_val,
+                daily_rp_cap=daily_rp_cap_val
             )
             await interaction.response.send_message("✅ RP settings updated.", ephemeral=True)
         except ValueError:
@@ -523,11 +697,33 @@ class HFSettingsModal(discord.ui.Modal, title="Configure HF Settings"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            attempt_xp = int(self.hf_attempt_xp.value)
+            success_xp = int(self.hf_success_xp.value)
+            daily_cap = int(self.daily_hf_cap.value)
+
+            # Validate attempt XP
+            is_valid, error_msg = validate_xp_amount(attempt_xp)
+            if not is_valid:
+                await interaction.response.send_message(f"❌ Attempt XP: {error_msg}", ephemeral=True)
+                return
+
+            # Validate success XP
+            is_valid, error_msg = validate_xp_amount(success_xp)
+            if not is_valid:
+                await interaction.response.send_message(f"❌ Success XP: {error_msg}", ephemeral=True)
+                return
+
+            # Validate daily cap
+            is_valid, error_msg = validate_daily_cap(daily_cap)
+            if not is_valid:
+                await interaction.response.send_message(f"❌ Daily cap: {error_msg}", ephemeral=True)
+                return
+
             await db.update_config(
                 GUILD_ID,
-                hf_attempt_xp=int(self.hf_attempt_xp.value),
-                hf_success_xp=int(self.hf_success_xp.value),
-                daily_hf_cap=int(self.daily_hf_cap.value)
+                hf_attempt_xp=attempt_xp,
+                hf_success_xp=success_xp,
+                daily_hf_cap=daily_cap
             )
             await interaction.response.send_message("✅ HF settings updated.", ephemeral=True)
         except ValueError:
