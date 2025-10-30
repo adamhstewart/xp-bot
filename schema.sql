@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS characters (
     daily_hf INTEGER DEFAULT 0,
     char_buffer INTEGER DEFAULT 0,
     image_url TEXT,
+    character_sheet_url TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(user_id, name)
