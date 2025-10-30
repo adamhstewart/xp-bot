@@ -14,11 +14,25 @@ logger = logging.getLogger('xp-bot')
 def setup_admin_commands(bot, db, guild_id):
     """Register admin commands"""
 
+    async def all_characters_autocomplete(interaction: discord.Interaction, current: str):
+        """Autocomplete function for all character names (admin command)"""
+        try:
+            # Search all characters across all users
+            char_names = await db.search_all_character_names(current, limit=25)
+            return [
+                app_commands.Choice(name=name, value=name)
+                for name in char_names
+            ]
+        except Exception as e:
+            logger.error(f"Error in all characters autocomplete: {e}")
+            return []
+
     @bot.tree.command(name="xp_grant", description="Grant XP to a character")
     @app_commands.describe(
         character_name="Name of the character to grant XP to",
         amount="Amount of XP to grant"
     )
+    @app_commands.autocomplete(character_name=all_characters_autocomplete)
     @app_commands.checks.cooldown(10, 60.0, key=lambda i: i.user.id)
     async def xp_grant(interaction: discord.Interaction, character_name: str, amount: int):
         if not interaction.user.guild_permissions.administrator:

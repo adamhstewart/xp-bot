@@ -351,6 +351,24 @@ class Database:
             )
             return [(char['user_id'], dict(char)) for char in chars]
 
+    async def search_all_character_names(self, search: str = "", limit: int = 25) -> List[str]:
+        """Search for character names across all users (for autocomplete)
+        Returns list of character names matching search term"""
+        async with self.pool.acquire() as conn:
+            if search:
+                # Case-insensitive search
+                chars = await conn.fetch(
+                    "SELECT DISTINCT name FROM characters WHERE LOWER(name) LIKE LOWER($1) ORDER BY name LIMIT $2",
+                    f"%{search}%", limit
+                )
+            else:
+                # Return most recently updated characters if no search
+                chars = await conn.fetch(
+                    "SELECT DISTINCT name FROM characters ORDER BY updated_at DESC LIMIT $1",
+                    limit
+                )
+            return [row['name'] for row in chars]
+
     @retry_on_db_error(max_attempts=3)
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,

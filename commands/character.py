@@ -19,8 +19,33 @@ logger = logging.getLogger('xp-bot')
 def setup_character_commands(bot, db):
     """Register character management commands"""
 
+    async def character_autocomplete(interaction: discord.Interaction, current: str):
+        """Autocomplete function for user's character names"""
+        try:
+            user_id = interaction.user.id
+            await db.ensure_user(user_id)
+            characters = await db.list_characters(user_id)
+
+            # Filter characters based on what user is typing
+            char_names = [char['name'] for char in characters]
+            if current:
+                # Case-insensitive filtering
+                filtered = [name for name in char_names if current.lower() in name.lower()]
+            else:
+                filtered = char_names
+
+            # Return up to 25 choices (Discord limit)
+            return [
+                app_commands.Choice(name=name, value=name)
+                for name in filtered[:25]
+            ]
+        except Exception as e:
+            logger.error(f"Error in character autocomplete: {e}")
+            return []
+
     @bot.tree.command(name="xp", description="View XP, level, and progress for a character")
     @app_commands.describe(char_name="Optional character name (defaults to active)")
+    @app_commands.autocomplete(char_name=character_autocomplete)
     @app_commands.checks.cooldown(3, 10.0, key=lambda i: i.user.id)
     async def xp(interaction: discord.Interaction, char_name: str = None):
         user_id = interaction.user.id
@@ -115,6 +140,7 @@ def setup_character_commands(bot, db):
 
     @bot.tree.command(name="xp_delete")
     @app_commands.describe(name="Character name to delete")
+    @app_commands.autocomplete(name=character_autocomplete)
     @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
     async def xp_delete(interaction: discord.Interaction, name: str):
         user_id = interaction.user.id
@@ -129,6 +155,7 @@ def setup_character_commands(bot, db):
 
     @bot.tree.command(name="xp_active", description="Set one of your characters as active")
     @app_commands.describe(char_name="Name of the character to activate")
+    @app_commands.autocomplete(char_name=character_autocomplete)
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
     async def xp_active(interaction: discord.Interaction, char_name: str):
         user_id = interaction.user.id
