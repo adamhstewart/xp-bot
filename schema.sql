@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS config (
     hf_attempt_xp INTEGER DEFAULT 1,
     hf_success_xp INTEGER DEFAULT 5,
     daily_hf_cap INTEGER DEFAULT 10,
+    character_creation_roles BIGINT[] DEFAULT '{}',
+    xp_request_channel BIGINT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -48,7 +50,19 @@ ALTER TABLE users
     FOREIGN KEY (active_character_id)
     REFERENCES characters(id) ON DELETE SET NULL;
 
+-- XP grant log (audit trail for manual XP grants)
+CREATE TABLE IF NOT EXISTS xp_grants (
+    id SERIAL PRIMARY KEY,
+    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    granted_by_user_id BIGINT NOT NULL,
+    amount INTEGER NOT NULL,
+    memo TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_characters_user_id ON characters(user_id);
 CREATE INDEX IF NOT EXISTS idx_characters_name ON characters(name);
 CREATE INDEX IF NOT EXISTS idx_users_last_reset ON users(last_xp_reset);
+CREATE INDEX IF NOT EXISTS idx_xp_grants_character_id ON xp_grants(character_id);
+CREATE INDEX IF NOT EXISTS idx_xp_grants_granted_by ON xp_grants(granted_by_user_id);

@@ -94,8 +94,9 @@ class Database:
                 # Create default config
                 config = await conn.fetchrow("""
                     INSERT INTO config (guild_id, rp_channels, hf_channels, char_per_rp,
-                                       daily_rp_cap, hf_attempt_xp, hf_success_xp, daily_hf_cap)
-                    VALUES ($1, '{}', '{}', 240, 10, 1, 5, 10)
+                                       daily_rp_cap, hf_attempt_xp, hf_success_xp, daily_hf_cap,
+                                       character_creation_roles, xp_request_channel)
+                    VALUES ($1, '{}', '{}', 240, 10, 1, 5, 10, '{}', NULL)
                     RETURNING *
                 """, guild_id)
 
@@ -159,6 +160,40 @@ class Database:
                     updated_at = NOW()
                 WHERE guild_id = $1
             """, guild_id, channel_id)
+
+    async def add_character_creation_role(self, guild_id: int, role_id: int):
+        """Add role to character creation permissions"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config
+                SET character_creation_roles = array_append(character_creation_roles, $2),
+                    updated_at = NOW()
+                WHERE guild_id = $1 AND NOT ($2 = ANY(character_creation_roles))
+            """, guild_id, role_id)
+
+    async def remove_character_creation_role(self, guild_id: int, role_id: int):
+        """Remove role from character creation permissions"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config
+                SET character_creation_roles = array_remove(character_creation_roles, $2),
+                    updated_at = NOW()
+                WHERE guild_id = $1
+            """, guild_id, role_id)
+
+    async def get_character_creation_roles(self, guild_id: int) -> list:
+        """Get list of role IDs allowed to create characters"""
+        config = await self.get_config(guild_id)
+        return config.get('character_creation_roles', [])
+
+    async def set_xp_request_channel(self, guild_id: int, channel_id: int):
+        """Set the channel where XP requests are posted"""
+        await self.update_config(guild_id, xp_request_channel=channel_id)
+
+    async def get_xp_request_channel(self, guild_id: int) -> Optional[int]:
+        """Get the XP request channel ID"""
+        config = await self.get_config(guild_id)
+        return config.get('xp_request_channel')
 
     # ==================== USER METHODS ====================
 
@@ -415,6 +450,14 @@ class Database:
                 SET char_buffer = $3, updated_at = NOW()
                 WHERE user_id = $1 AND name = $2
             """, user_id, char_name, new_buffer)
+
+    async def log_xp_grant(self, character_id: int, granted_by_user_id: int, amount: int, memo: Optional[str] = None):
+        """Log an XP grant for audit trail"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO xp_grants (character_id, granted_by_user_id, amount, memo)
+                VALUES ($1, $2, $3, $4)
+            """, character_id, granted_by_user_id, amount, memo)
 
     async def update_character(self, user_id: int, old_name: str, new_name: Optional[str] = None,
                               image_url: Optional[str] = None, character_sheet_url: Optional[str] = None) -> bool:
