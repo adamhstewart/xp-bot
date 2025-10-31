@@ -54,7 +54,7 @@ from commands.info import setup_info_commands
 # Setup handlers and commands
 setup_events(bot, db, GUILD_ID)
 setup_error_handlers(bot)
-setup_character_commands(bot, db)
+setup_character_commands(bot, db, GUILD_ID)
 setup_admin_commands(bot, db, GUILD_ID)
 setup_info_commands(bot, db, GUILD_ID)
 

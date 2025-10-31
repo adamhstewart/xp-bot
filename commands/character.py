@@ -13,12 +13,30 @@ from utils.exceptions import (
     DuplicateCharacterError
 )
 from ui.character_view import CharacterNavigationView
+from ui.xp_request_view import XPRequestView
 
 logger = logging.getLogger('xp-bot')
 
 
-def setup_character_commands(bot, db):
+def setup_character_commands(bot, db, guild_id):
     """Register character management commands"""
+
+    async def has_character_creation_permission(interaction: discord.Interaction) -> bool:
+        """Check if user has permission to create characters"""
+        # Admins always have permission
+        if interaction.user.guild_permissions.administrator:
+            return True
+
+        # Check if user has any of the allowed roles
+        allowed_role_ids = await db.get_character_creation_roles(guild_id)
+
+        # If no roles configured, allow everyone
+        if not allowed_role_ids:
+            return True
+
+        # Check if user has any allowed role
+        user_role_ids = [role.id for role in interaction.user.roles]
+        return any(role_id in allowed_role_ids for role_id in user_role_ids)
 
     async def character_autocomplete(interaction: discord.Interaction, current: str):
         """Autocomplete function for user's character names"""
@@ -87,19 +105,49 @@ def setup_character_commands(bot, db):
 
     @bot.tree.command(name="xp_create", description="Create a new character")
     @app_commands.describe(
+        user="User to create character for (defaults to yourself)",
         char_name="Character name",
-        image_url="Optional image URL",
-        sheet_url="Optional character sheet URL"
+        sheet_url="Character sheet URL",
+        image_url="Optional image URL"
     )
     @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
-    async def xp_create(interaction: discord.Interaction, char_name: str, image_url: str = None, sheet_url: str = None):
-        user_id = interaction.user.id
+    async def xp_create(interaction: discord.Interaction, user: discord.User = None, char_name: str = "", sheet_url: str = "", image_url: str = None):
+        # Check required fields
+        if not char_name or not char_name.strip():
+            await interaction.response.send_message("❌ Character name is required.", ephemeral=True)
+            return
+
+        if not sheet_url or not sheet_url.strip():
+            await interaction.response.send_message("❌ Character sheet URL is required.", ephemeral=True)
+            return
+
+        # Check if user has permission to create characters
+        if not await has_character_creation_permission(interaction):
+            await interaction.response.send_message(
+                "❌ You don't have permission to create characters. Contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        # Default to creating for self
+        if user is None:
+            user = interaction.user
+
+        target_user_id = user.id
+
+        # Only admins can create characters for other users
+        if target_user_id != interaction.user.id and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only administrators can create characters for other users.",
+                ephemeral=True
+            )
+            return
 
         # Validate character name
         is_valid, error_msg = validate_character_name(char_name)
         if not is_valid:
             await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
-            logger.debug(f"Invalid character name '{char_name}' from user {user_id}: {error_msg}")
+            logger.debug(f"Invalid character name '{char_name}' from user {interaction.user.id}: {error_msg}")
             return
 
         # Validate image URL if provided
@@ -107,40 +155,45 @@ def setup_character_commands(bot, db):
             is_valid, error_msg = validate_image_url(image_url)
             if not is_valid:
                 await interaction.response.send_message(f"❌ Image URL: {error_msg}", ephemeral=True)
-                logger.debug(f"Invalid image URL from user {user_id}: {error_msg}")
+                logger.debug(f"Invalid image URL from user {interaction.user.id}: {error_msg}")
                 return
 
-        # Validate character sheet URL if provided
-        if sheet_url:
-            is_valid, error_msg = validate_character_sheet_url(sheet_url)
-            if not is_valid:
-                await interaction.response.send_message(f"❌ Character sheet URL: {error_msg}", ephemeral=True)
-                logger.debug(f"Invalid character sheet URL from user {user_id}: {error_msg}")
-                return
+        # Validate character sheet URL (now required)
+        is_valid, error_msg = validate_character_sheet_url(sheet_url)
+        if not is_valid:
+            await interaction.response.send_message(f"❌ Character sheet URL: {error_msg}", ephemeral=True)
+            logger.debug(f"Invalid character sheet URL from user {interaction.user.id}: {error_msg}")
+            return
 
-        await db.ensure_user(user_id)
+        await db.ensure_user(target_user_id)
 
         # Check if character already exists
         char_name = char_name.strip()  # Use trimmed version
-        existing = await db.get_character(user_id, char_name)
+        existing = await db.get_character(target_user_id, char_name)
         if existing:
-            await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
+            if target_user_id == interaction.user.id:
+                await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Character '{char_name}' already exists for {user.display_name}.", ephemeral=True)
             return
 
         # Create character
         try:
-            await db.create_character(user_id, char_name, image_url, sheet_url)
-            await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
+            await db.create_character(target_user_id, char_name, image_url, sheet_url)
+            if target_user_id == interaction.user.id:
+                await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"✅ Character '{char_name}' created for {user.display_name}.", ephemeral=True)
         except DuplicateCharacterError:
             await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
         except DatabaseError as e:
-            logger.error(f"Database error creating character '{char_name}' for user {user_id}: {e}")
+            logger.error(f"Database error creating character '{char_name}' for user {target_user_id}: {e}")
             await interaction.response.send_message(
                 "⚠️ Database temporarily unavailable. Please try again in a moment.",
                 ephemeral=True
             )
         except Exception as e:
-            logger.error(f"Unexpected error creating character '{char_name}' for user {user_id}: {e}")
+            logger.error(f"Unexpected error creating character '{char_name}' for user {target_user_id}: {e}")
             await interaction.response.send_message(
                 "❌ An unexpected error occurred. Please try again later.",
                 ephemeral=True
@@ -322,6 +375,133 @@ def setup_character_commands(bot, db):
             logger.error(f"Unexpected error updating character '{matched_name}' for user {user_id}: {e}")
             await interaction.response.send_message(
                 "❌ An unexpected error occurred. Please try again later.",
+                ephemeral=True
+            )
+
+    @bot.tree.command(name="xp_request", description="Request XP for a character")
+    @app_commands.describe(
+        char_name="Character to request XP for",
+        amount="Amount of XP requested",
+        memo="Reason for XP request"
+    )
+    @app_commands.autocomplete(char_name=character_autocomplete)
+    @app_commands.checks.cooldown(5, 300.0, key=lambda i: i.user.id)
+    async def xp_request(interaction: discord.Interaction, char_name: str, amount: int, memo: str):
+        user_id = interaction.user.id
+        await db.ensure_user(user_id)
+
+        # Check if user has any characters
+        characters = await db.list_characters(user_id)
+        if not characters:
+            await interaction.response.send_message("❌ You don't have any characters yet.", ephemeral=True)
+            return
+
+        # Find the character
+        char = await db.get_character(user_id, char_name)
+        if not char:
+            # Try fuzzy match
+            char_names = [c['name'] for c in characters]
+            matches = difflib.get_close_matches(char_name, char_names, n=1, cutoff=0.6)
+            if not matches:
+                await interaction.response.send_message(f"❌ Character '{char_name}' not found.", ephemeral=True)
+                return
+            char = await db.get_character(user_id, matches[0])
+
+        # Validate amount
+        if amount <= 0:
+            await interaction.response.send_message("❌ XP amount must be positive.", ephemeral=True)
+            return
+
+        if amount > 25000:
+            await interaction.response.send_message("❌ XP requests are limited to 25000 XP per request.", ephemeral=True)
+            return
+
+        # Check if request channel is configured
+        request_channel_id = await db.get_xp_request_channel(guild_id)
+        if not request_channel_id:
+            await interaction.response.send_message(
+                "❌ XP request channel is not configured. Contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        # Get the request channel
+        request_channel = bot.get_channel(request_channel_id)
+        if not request_channel:
+            await interaction.response.send_message(
+                "❌ XP request channel not found. Contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        # Get current level and XP info
+        from utils.xp import get_level_and_progress
+        xp_amount = char['xp']
+        level, progress, required = get_level_and_progress(xp_amount)
+
+        # Create the request embed
+        embed = discord.Embed(
+            title=f"XP Request - {char['name']}",
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+
+        # Player ID field
+        embed.add_field(
+            name="**Player**",
+            value=f"<@{user_id}>",
+            inline=False
+        )
+
+        # Current Level and Total XP (inline)
+        embed.add_field(
+            name="**Current Level**",
+            value=str(level),
+            inline=True
+        )
+
+        embed.add_field(
+            name="**Current Total XP**",
+            value=f"{xp_amount:,}",
+            inline=True
+        )
+
+        # Requested amount
+        embed.add_field(
+            name="**Requested Amount**",
+            value=f"{amount:,} XP",
+            inline=False
+        )
+
+        # Reason
+        embed.add_field(
+            name="**Reason**",
+            value=memo,
+            inline=False
+        )
+
+        # Add character image as thumbnail
+        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+        image_url = char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+        embed.set_thumbnail(url=image_url)
+
+        embed.set_footer(text=f"Request by {interaction.user.display_name}")
+
+        # Create the approval view
+        view = XPRequestView(user_id, char['id'], char['name'], user_id, amount, memo, db)
+
+        # Post to request channel
+        try:
+            await request_channel.send(embed=embed, view=view)
+            await interaction.response.send_message(
+                f"✅ XP request submitted for **{char['name']}** ({amount} XP).\nAdministrators will review your request.",
+                ephemeral=True
+            )
+            logger.info(f"XP request submitted by user {user_id} for character '{char['name']}': {amount} XP")
+        except Exception as e:
+            logger.error(f"Failed to post XP request: {e}")
+            await interaction.response.send_message(
+                "❌ Failed to submit XP request. Contact an administrator.",
                 ephemeral=True
             )
 
