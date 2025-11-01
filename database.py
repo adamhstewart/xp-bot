@@ -286,7 +286,8 @@ class Database:
             raise DatabaseError(f"Failed to create character") from e
 
     async def delete_character(self, user_id: int, name: str) -> bool:
-        """Delete a character, returns True if deleted"""
+        """Delete a character permanently, returns True if deleted
+        DEPRECATED: Use retire_character() instead for soft deletion"""
         async with self.pool.acquire() as conn:
             # Get character ID first
             char = await conn.fetchrow(
@@ -305,31 +306,111 @@ class Database:
 
             return True
 
-    async def get_character(self, user_id: int, name: str) -> Optional[Dict]:
-        """Get character by name"""
+    async def retire_character(self, user_id: int, name: str) -> bool:
+        """Retire a character (soft delete), returns True if retired
+        Retired characters are hidden but can be restored"""
         async with self.pool.acquire() as conn:
+            # Get character ID
             char = await conn.fetchrow(
-                "SELECT * FROM characters WHERE user_id = $1 AND name = $2",
+                "SELECT id FROM characters WHERE user_id = $1 AND name = $2 AND retired = FALSE",
                 user_id, name
             )
+
+            if not char:
+                return False
+
+            # Mark as retired and clear if it's the active character
+            await conn.execute("""
+                UPDATE characters
+                SET retired = TRUE, updated_at = NOW()
+                WHERE id = $1
+            """, char['id'])
+
+            # Clear active_character_id if this was the active character
+            await conn.execute("""
+                UPDATE users
+                SET active_character_id = NULL, updated_at = NOW()
+                WHERE user_id = $1 AND active_character_id = $2
+            """, user_id, char['id'])
+
+            logger.info(f"Retired character '{name}' (ID: {char['id']}) for user {user_id}")
+            return True
+
+    async def restore_character(self, user_id: int, name: str) -> bool:
+        """Restore a retired character, returns True if restored"""
+        async with self.pool.acquire() as conn:
+            # Get retired character
+            char = await conn.fetchrow(
+                "SELECT id FROM characters WHERE user_id = $1 AND name = $2 AND retired = TRUE",
+                user_id, name
+            )
+
+            if not char:
+                return False
+
+            # Unmark as retired
+            await conn.execute("""
+                UPDATE characters
+                SET retired = FALSE, updated_at = NOW()
+                WHERE id = $1
+            """, char['id'])
+
+            logger.info(f"Restored character '{name}' (ID: {char['id']}) for user {user_id}")
+            return True
+
+    async def purge_user(self, user_id: int) -> bool:
+        """Permanently delete a user and all their characters (for GDPR compliance)
+        Returns True if user existed and was deleted"""
+        async with self.pool.acquire() as conn:
+            # Check if user exists
+            user = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE user_id = $1",
+                user_id
+            )
+
+            if not user:
+                return False
+
+            # Delete user (CASCADE will delete all characters and related data)
+            await conn.execute(
+                "DELETE FROM users WHERE user_id = $1",
+                user_id
+            )
+
+            logger.warning(f"PURGED user {user_id} and all their characters from database")
+            return True
+
+    async def get_character(self, user_id: int, name: str, include_retired: bool = False) -> Optional[Dict]:
+        """Get character by name (excludes retired by default)"""
+        async with self.pool.acquire() as conn:
+            if include_retired:
+                char = await conn.fetchrow(
+                    "SELECT * FROM characters WHERE user_id = $1 AND name = $2",
+                    user_id, name
+                )
+            else:
+                char = await conn.fetchrow(
+                    "SELECT * FROM characters WHERE user_id = $1 AND name = $2 AND retired = FALSE",
+                    user_id, name
+                )
             return dict(char) if char else None
 
     async def get_active_character(self, user_id: int) -> Optional[Dict]:
-        """Get user's active character"""
+        """Get user's active character (excludes retired)"""
         async with self.pool.acquire() as conn:
             char = await conn.fetchrow("""
                 SELECT c.* FROM characters c
                 JOIN users u ON u.active_character_id = c.id
-                WHERE u.user_id = $1
+                WHERE u.user_id = $1 AND c.retired = FALSE
             """, user_id)
             return dict(char) if char else None
 
     async def set_active_character(self, user_id: int, name: str) -> bool:
-        """Set user's active character by name"""
+        """Set user's active character by name (cannot set retired characters as active)"""
         async with self.pool.acquire() as conn:
-            # Get character ID
+            # Get character ID (only non-retired)
             char = await conn.fetchrow(
-                "SELECT id FROM characters WHERE user_id = $1 AND name = $2",
+                "SELECT id FROM characters WHERE user_id = $1 AND name = $2 AND retired = FALSE",
                 user_id, name
             )
 
@@ -345,63 +426,97 @@ class Database:
 
             return True
 
-    async def list_characters(self, user_id: int) -> List[Dict]:
-        """List all characters for a user"""
+    async def list_characters(self, user_id: int, include_retired: bool = False) -> List[Dict]:
+        """List all characters for a user (excludes retired by default)"""
         async with self.pool.acquire() as conn:
-            chars = await conn.fetch(
-                "SELECT * FROM characters WHERE user_id = $1 ORDER BY created_at",
-                user_id
-            )
+            if include_retired:
+                chars = await conn.fetch(
+                    "SELECT * FROM characters WHERE user_id = $1 ORDER BY created_at",
+                    user_id
+                )
+            else:
+                chars = await conn.fetch(
+                    "SELECT * FROM characters WHERE user_id = $1 AND retired = FALSE ORDER BY created_at",
+                    user_id
+                )
             return [dict(char) for char in chars]
 
-    async def get_all_character_names(self, user_id: int) -> List[str]:
-        """Get list of character names for a user (for fuzzy matching)"""
+    async def get_all_character_names(self, user_id: int, include_retired: bool = False) -> List[str]:
+        """Get list of character names for a user (excludes retired by default)"""
         async with self.pool.acquire() as conn:
-            names = await conn.fetch(
-                "SELECT name FROM characters WHERE user_id = $1",
-                user_id
-            )
+            if include_retired:
+                names = await conn.fetch(
+                    "SELECT name FROM characters WHERE user_id = $1",
+                    user_id
+                )
+            else:
+                names = await conn.fetch(
+                    "SELECT name FROM characters WHERE user_id = $1 AND retired = FALSE",
+                    user_id
+                )
             return [row['name'] for row in names]
 
-    async def find_character_by_name_any_user(self, name: str) -> Optional[Tuple[int, Dict]]:
+    async def find_character_by_name_any_user(self, name: str, include_retired: bool = False) -> Optional[Tuple[int, Dict]]:
         """Find character by name across all users (for HF tracking)
         Returns (user_id, character_dict) or None
         DEPRECATED: Use find_all_characters_by_name() for collision-safe lookups"""
         async with self.pool.acquire() as conn:
-            char = await conn.fetchrow(
-                "SELECT * FROM characters WHERE name = $1 LIMIT 1",
-                name
-            )
+            if include_retired:
+                char = await conn.fetchrow(
+                    "SELECT * FROM characters WHERE name = $1 LIMIT 1",
+                    name
+                )
+            else:
+                char = await conn.fetchrow(
+                    "SELECT * FROM characters WHERE name = $1 AND retired = FALSE LIMIT 1",
+                    name
+                )
             if char:
                 return (char['user_id'], dict(char))
             return None
 
-    async def find_all_characters_by_name(self, name: str) -> List[Tuple[int, Dict]]:
+    async def find_all_characters_by_name(self, name: str, include_retired: bool = False) -> List[Tuple[int, Dict]]:
         """Find all characters with given name across all users (for HF tracking)
-        Returns list of (user_id, character_dict) tuples"""
+        Returns list of (user_id, character_dict) tuples (excludes retired by default)"""
         async with self.pool.acquire() as conn:
-            chars = await conn.fetch(
-                "SELECT * FROM characters WHERE name = $1",
-                name
-            )
-            return [(char['user_id'], dict(char)) for char in chars]
-
-    async def search_all_character_names(self, search: str = "", limit: int = 25) -> List[str]:
-        """Search for character names across all users (for autocomplete)
-        Returns list of character names matching search term"""
-        async with self.pool.acquire() as conn:
-            if search:
-                # Case-insensitive search
+            if include_retired:
                 chars = await conn.fetch(
-                    "SELECT DISTINCT name FROM characters WHERE LOWER(name) LIKE LOWER($1) ORDER BY name LIMIT $2",
-                    f"%{search}%", limit
+                    "SELECT * FROM characters WHERE name = $1",
+                    name
                 )
             else:
-                # Return most recently updated characters if no search
                 chars = await conn.fetch(
-                    "SELECT DISTINCT name FROM characters ORDER BY updated_at DESC LIMIT $1",
-                    limit
+                    "SELECT * FROM characters WHERE name = $1 AND retired = FALSE",
+                    name
                 )
+            return [(char['user_id'], dict(char)) for char in chars]
+
+    async def search_all_character_names(self, search: str = "", limit: int = 25, include_retired: bool = False) -> List[str]:
+        """Search for character names across all users (for autocomplete, excludes retired by default)
+        Returns list of character names matching search term"""
+        async with self.pool.acquire() as conn:
+            if include_retired:
+                if search:
+                    chars = await conn.fetch(
+                        "SELECT DISTINCT name FROM characters WHERE LOWER(name) LIKE LOWER($1) ORDER BY name LIMIT $2",
+                        f"%{search}%", limit
+                    )
+                else:
+                    chars = await conn.fetch(
+                        "SELECT DISTINCT name FROM characters ORDER BY updated_at DESC LIMIT $1",
+                        limit
+                    )
+            else:
+                if search:
+                    chars = await conn.fetch(
+                        "SELECT DISTINCT name FROM characters WHERE LOWER(name) LIKE LOWER($1) AND retired = FALSE ORDER BY name LIMIT $2",
+                        f"%{search}%", limit
+                    )
+                else:
+                    chars = await conn.fetch(
+                        "SELECT DISTINCT name FROM characters WHERE retired = FALSE ORDER BY updated_at DESC LIMIT $1",
+                        limit
+                    )
             return [row['name'] for row in chars]
 
     @retry_on_db_error(max_attempts=3)
