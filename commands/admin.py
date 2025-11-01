@@ -156,12 +156,73 @@ def setup_admin_commands(bot, db, guild_id):
                 except Exception as e:
                     logger.error(f"Failed to post XP grant notification: {e}")
 
+        # Send DM to the character owner
+        try:
+            character_owner = await interaction.client.fetch_user(user_id)
+            action_emoji = "✅" if amount >= 0 else "⚠️"
+            action_word = "granted to" if amount >= 0 else "removed from"
+
+            dm_message = (
+                f"{action_emoji} XP has been {action_word} **{char_name}**!\n"
+                f"Amount: {abs(amount):,} XP\n"
+                f"New Total XP: {new_xp:,}\n"
+                f"New Level: {new_level}\n"
+                f"Granted by: {interaction.user.display_name}"
+            )
+
+            if memo:
+                dm_message += f"\nReason: {memo}"
+
+            await character_owner.send(dm_message)
+        except discord.Forbidden:
+            logger.warning(f"Could not send DM to user {user_id} - DMs may be disabled")
+        except Exception as e:
+            logger.warning(f"Could not send XP grant notification to user {user_id}: {e}")
+
         action = "Granted" if amount >= 0 else "Removed"
         response = f"✅ {action} {abs(amount)} XP {'to' if amount >= 0 else 'from'} **{char_name}** (user ID: {user_id})."
         if memo:
             response += f"\nMemo: {memo}"
 
         await interaction.response.send_message(response, ephemeral=True)
+
+    @bot.tree.command(name="xp_purge", description="[Admin] Permanently delete a user and all their characters")
+    @app_commands.describe(user="User to permanently delete from the database")
+    @app_commands.checks.cooldown(1, 300.0, key=lambda i: i.user.id)
+    async def xp_purge(interaction: discord.Interaction, user: discord.User):
+        # Only administrators can purge users
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+            return
+
+        user_id = user.id
+
+        # Get character count before purging
+        characters = await db.list_characters(user_id, include_retired=True)
+        char_count = len(characters)
+
+        if char_count == 0:
+            await interaction.response.send_message(
+                f"⚠️ User {user.mention} has no characters in the database.",
+                ephemeral=True
+            )
+            return
+
+        # Purge the user
+        purged = await db.purge_user(user_id)
+
+        if purged:
+            await interaction.response.send_message(
+                f"🗑️ **PURGED** user {user.mention} (ID: {user_id}) and **{char_count}** character(s) from the database.\n\n"
+                f"_This action was performed for data privacy compliance. All user data has been permanently deleted._",
+                ephemeral=True
+            )
+            logger.warning(f"Admin {interaction.user.id} purged user {user_id} and {char_count} characters")
+        else:
+            await interaction.response.send_message(
+                f"❌ User {user.mention} not found in the database.",
+                ephemeral=True
+            )
 
     @bot.tree.command(name="xp_add_rp_channel")
     @app_commands.describe(channel="Channel to enable for RP XP tracking")

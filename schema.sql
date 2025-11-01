@@ -38,10 +38,15 @@ CREATE TABLE IF NOT EXISTS characters (
     char_buffer INTEGER DEFAULT 0,
     image_url TEXT,
     character_sheet_url TEXT,
+    retired BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(user_id, name)
+    updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Unique constraint only for active (non-retired) characters
+CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_user_name_active
+    ON characters(user_id, name)
+    WHERE retired = FALSE;
 
 -- Add foreign key for active character (must be after characters table exists)
 ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_active_character;
@@ -63,6 +68,7 @@ CREATE TABLE IF NOT EXISTS xp_grants (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_characters_user_id ON characters(user_id);
 CREATE INDEX IF NOT EXISTS idx_characters_name ON characters(name);
+CREATE INDEX IF NOT EXISTS idx_characters_retired ON characters(retired);
 CREATE INDEX IF NOT EXISTS idx_users_last_reset ON users(last_xp_reset);
 CREATE INDEX IF NOT EXISTS idx_xp_grants_character_id ON xp_grants(character_id);
 CREATE INDEX IF NOT EXISTS idx_xp_grants_granted_by ON xp_grants(granted_by_user_id);

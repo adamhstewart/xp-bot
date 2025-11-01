@@ -24,7 +24,9 @@ Built with Python, Discord.py, and PostgreSQL.
 - Create and manage multiple characters per user
 - Set active character for automatic RP XP tracking
 - View character XP, level (1-20), and progress bars
-- Character images in XP displays
+- Character images and sheet URLs in XP displays
+- Retire characters (soft delete) with preservation of data
+- Admin tools for character restoration and data purging (GDPR)
 
 ### RP (Role-Play) Tracking
 - Automatic XP from messages in designated RP channels
@@ -109,11 +111,11 @@ That's it! The bot should now be online.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/xp_create` | Create a new character | `/xp_create char_name:Luna image_url:https://...` |
-| `/xp_active` | Set active character | `/xp_active char_name:Luna` |
-| `/xp` | View character info | `/xp` or `/xp char_name:Luna` |
-| `/xp_list` | List all your characters | `/xp_list` |
-| `/xp_delete` | Delete a character | `/xp_delete name:Luna` |
+| `/xp_create` | Create a new character | `/xp_create char_name:Luna sheet_url:https://... image_url:https://...` |
+| `/xp` | View characters with navigation, set active, retire, or view other users | `/xp` or `/xp user:@Player` |
+| `/xp_edit` | Edit character details (name, image, sheet) | `/xp_edit char_name:Luna new_name:Luna-2` |
+| `/xp_request` | Request XP for a character (admin approval) | `/xp_request char_name:Luna amount:100 memo:"Completed quest"` |
+| `/xp_retire` | **(Admin)** Retire a character (soft delete, can be restored) | `/xp_retire character_name:Luna` |
 
 ### Info Commands
 
@@ -128,13 +130,18 @@ That's it! The bot should now be online.
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/xp_grant` | Grant/remove XP | `/xp_grant character_name:Luna amount:100` |
+| `/xp_grant` | Grant/remove XP | `/xp_grant character_name:Luna amount:100 memo:"Quest reward"` |
+| `/xp_retire` | Retire a character (soft delete, restorable) | `/xp_retire character_name:Luna` |
+| `/xp_purge` | **Permanently** delete user and all their data (GDPR) | `/xp_purge user:@Player` |
 | `/xp_add_rp_channel` | Enable RP tracking in channel | `/xp_add_rp_channel channel:#rp` |
 | `/xp_remove_rp_channel` | Disable RP tracking | `/xp_remove_rp_channel channel:#rp` |
 | `/xp_add_hf_channel` | Enable HF tracking | `/xp_add_hf_channel channel:#hunting` |
 | `/xp_remove_hf_channel` | Disable HF tracking | `/xp_remove_hf_channel channel:#hunting` |
 | `/xp_set_cap` | Set daily RP XP cap | `/xp_set_cap amount:10` |
 | `/xp_config_hf` | Configure HF XP rates | `/xp_config_hf attempt_xp:1 success_xp:5 daily_cap:10` |
+| `/xp_add_creator_role` | Add role that can create characters | `/xp_add_creator_role role:@GameMaster` |
+| `/xp_remove_creator_role` | Remove character creation permissions | `/xp_remove_creator_role role:@GameMaster` |
+| `/xp_set_request_channel` | Set channel for XP requests | `/xp_set_request_channel channel:#xp-requests` |
 
 ### Legacy Commands
 

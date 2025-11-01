@@ -199,70 +199,69 @@ def setup_character_commands(bot, db, guild_id):
                 ephemeral=True
             )
 
-    @bot.tree.command(name="xp_delete")
-    @app_commands.describe(name="Character name to delete")
-    @app_commands.autocomplete(name=character_autocomplete)
-    @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
-    async def xp_delete(interaction: discord.Interaction, name: str):
-        user_id = interaction.user.id
-        await db.ensure_user(user_id)
+    async def all_characters_autocomplete_for_retire(interaction: discord.Interaction, current: str):
+        """Autocomplete function for all character names (admin command for retiring)"""
+        try:
+            # Check if user has character creation permission (same as granting XP)
+            if not interaction.user.guild_permissions.administrator:
+                allowed_role_ids = await db.get_character_creation_roles(guild_id)
+                if allowed_role_ids:
+                    user_role_ids = [role.id for role in interaction.user.roles]
+                    if not any(role_id in allowed_role_ids for role_id in user_role_ids):
+                        return []
 
-        deleted = await db.delete_character(user_id, name)
-        if not deleted:
+            # Search all characters across all users
+            char_names = await db.search_all_character_names(current, limit=25)
+            return [
+                app_commands.Choice(name=name, value=name)
+                for name in char_names
+            ]
+        except Exception as e:
+            logger.error(f"Error in all characters autocomplete: {e}")
+            return []
+
+    @bot.tree.command(name="xp_retire", description="[Admin] Retire a character (soft delete)")
+    @app_commands.describe(character_name="Character name to retire")
+    @app_commands.autocomplete(character_name=all_characters_autocomplete_for_retire)
+    @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
+    async def xp_retire(interaction: discord.Interaction, character_name: str):
+        # Check if user has permission to retire characters (admin or character creation role)
+        has_permission = interaction.user.guild_permissions.administrator
+        if not has_permission:
+            allowed_role_ids = await db.get_character_creation_roles(guild_id)
+            if allowed_role_ids:
+                user_role_ids = [role.id for role in interaction.user.roles]
+                has_permission = any(role_id in allowed_role_ids for role_id in user_role_ids)
+            else:
+                has_permission = False
+
+        if not has_permission:
+            await interaction.response.send_message(
+                "❌ You don't have permission to retire characters. Contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        # Find character across all users
+        result = await db.find_character_by_name_any_user(character_name)
+        if not result:
             await interaction.response.send_message("❌ Character not found.", ephemeral=True)
             return
 
-        await interaction.response.send_message(f"🗑️ Deleted character '{name}'.", ephemeral=True)
+        user_id, char_data = result
+        char_name = char_data['name']
 
-    @bot.tree.command(name="xp_active", description="Set one of your characters as active")
-    @app_commands.describe(char_name="Name of the character to activate")
-    @app_commands.autocomplete(char_name=character_autocomplete)
-    @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_active(interaction: discord.Interaction, char_name: str):
-        user_id = interaction.user.id
-        await db.ensure_user(user_id)
-
-        chars = await db.list_characters(user_id)
-        if not chars:
-            await interaction.response.send_message("❌ You have no characters to activate.", ephemeral=True)
+        # Retire the character
+        retired = await db.retire_character(user_id, char_name)
+        if not retired:
+            await interaction.response.send_message("❌ Character not found or already retired.", ephemeral=True)
             return
 
-        # Try exact match first
-        char_names = [c['name'] for c in chars]
-        matched_name = char_name
-
-        if char_name not in char_names:
-            # Try fuzzy match
-            matches = difflib.get_close_matches(char_name, char_names, n=1, cutoff=0.6)
-            if not matches:
-                await interaction.response.send_message(f"❌ No character found matching '{char_name}'.", ephemeral=True)
-                return
-            matched_name = matches[0]
-
-        # Set as active
-        await db.set_active_character(user_id, matched_name)
-        await interaction.response.send_message(f"🟢 '{matched_name}' is now your active character.", ephemeral=True)
-
-    @bot.tree.command(name="xp_list")
-    @app_commands.checks.cooldown(3, 30.0, key=lambda i: i.user.id)
-    async def xp_list(interaction: discord.Interaction):
-        user_id = interaction.user.id
-        await db.ensure_user(user_id)
-
-        chars = await db.list_characters(user_id)
-        active_char = await db.get_active_character(user_id)
-        active_name = active_char['name'] if active_char else None
-
-        if not chars:
-            await interaction.response.send_message("You have no characters.", ephemeral=True)
-            return
-
-        lines = []
-        for char in chars:
-            mark = "🟢" if char['name'] == active_name else "⚪"
-            lines.append(f"{mark} {char['name']} — {char['xp']} XP")
-
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ Retired character '{char_name}' (user ID: {user_id}).\n"
+            f"_Character data preserved in database and can be restored if needed._",
+            ephemeral=True
+        )
 
     @bot.tree.command(name="xp_edit", description="Edit character details (name, image, sheet)")
     @app_commands.describe(
