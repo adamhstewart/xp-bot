@@ -1,5 +1,35 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Environment and secrets
 .env
+.env.local
+
+# Legacy data
 xp.json
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Development
+docker-compose.yml
+Dockerfile
+*.log
+migrate_add_retired.sql
+
+# Documentation
+README.md
+LICENSE

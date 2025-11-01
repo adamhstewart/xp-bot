@@ -1,24 +1,25 @@
-# fly.toml app configuration file generated for xp-bot on 2025-04-12T20:09:38Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# fly.toml app configuration file for xp-bot Discord bot
+# See https://fly.io/docs/reference/configuration/
 
 app = 'xp-bot'
+primary_region = 'iad'  # Change to your preferred region
+
 kill_signal = "SIGINT"
-kill_timeout = 5
-processes = { worker = "python bot.py" }
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile.prod"
 
 [env]
-PORT = "8080"
 ENV = "prod"
 
-[[services]]
-internal_port = 8080
-protocol = "tcp"
-processes = ["worker"]  # <--- This line matches the process defined above
+[processes]
+worker = "python bot.py"
 
-  [[services.ports]]
-  port = 8080
-  handlers = []  # No HTTP handler
+# Discord bots don't need exposed ports, so no [[services]] section
 
-[checks]  # Optional - disables health checks
+# VM resources - adjust based on needs
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
