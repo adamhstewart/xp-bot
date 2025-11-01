@@ -1,8 +1,8 @@
 # fly.toml app configuration file for xp-bot Discord bot
 # See https://fly.io/docs/reference/configuration/
 
-app = 'xp-bot'
-primary_region = 'iad'  # Change to your preferred region
+app = 'xp-bot-young-brook-5946'
+primary_region = 'ord'
 
 kill_signal = "SIGINT"
 kill_timeout = 10
@@ -11,15 +11,12 @@ kill_timeout = 10
   dockerfile = "Dockerfile.prod"
 
 [env]
-ENV = "prod"
+  ENV = "prod"
 
-[processes]
-worker = "python bot.py"
+# Discord bots don't need HTTP service - remove auto-stop behavior
+# Keep the bot running 24/7
 
-# Discord bots don't need exposed ports, so no [[services]] section
-
-# VM resources - adjust based on needs
-[vm]
-  cpu_kind = "shared"
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
