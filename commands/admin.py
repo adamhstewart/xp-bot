@@ -321,37 +321,37 @@ def setup_admin_commands(bot, db, guild_id):
         await db.update_config(guild_id, daily_rp_cap=amount)
         await interaction.response.send_message(f"✅ Daily XP cap set to {amount}.", ephemeral=True)
 
-    @bot.tree.command(name="xp_add_creator_role", description="Add a role that can create characters")
-    @app_commands.describe(role="Role to grant character creation permissions")
+    @bot.tree.command(name="xp_add_admin_role", description="Add a role that can create characters and grant XP")
+    @app_commands.describe(role="Role to grant admin permissions (character creation and XP granting)")
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_add_creator_role(interaction: discord.Interaction, role: discord.Role):
+    async def xp_add_admin_role(interaction: discord.Interaction, role: discord.Role):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
         await db.add_character_creation_role(guild_id, role.id)
         await interaction.response.send_message(
-            f"✅ Role {role.mention} can now create characters.",
+            f"✅ Role {role.mention} can now create characters and grant XP.",
             ephemeral=True
         )
 
-    @bot.tree.command(name="xp_remove_creator_role", description="Remove character creation permissions from a role")
-    @app_commands.describe(role="Role to remove character creation permissions from")
+    @bot.tree.command(name="xp_remove_admin_role", description="Remove XP admin permissions from a role")
+    @app_commands.describe(role="Role to remove admin permissions from")
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_remove_creator_role(interaction: discord.Interaction, role: discord.Role):
+    async def xp_remove_admin_role(interaction: discord.Interaction, role: discord.Role):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
         await db.remove_character_creation_role(guild_id, role.id)
         await interaction.response.send_message(
-            f"🚫 Role {role.mention} can no longer create characters.",
+            f"🚫 Role {role.mention} can no longer create characters or grant XP.",
             ephemeral=True
         )
 
-    @bot.tree.command(name="xp_list_creator_roles", description="List roles that can create characters")
+    @bot.tree.command(name="xp_list_admin_roles", description="List roles with XP admin permissions")
     @app_commands.checks.cooldown(3, 30.0, key=lambda i: i.user.id)
-    async def xp_list_creator_roles(interaction: discord.Interaction):
+    async def xp_list_admin_roles(interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
@@ -360,28 +360,28 @@ def setup_admin_commands(bot, db, guild_id):
 
         if not role_ids:
             await interaction.response.send_message(
-                "No roles configured. Use `/xp_add_creator_role` to add roles that can create characters.",
+                "No roles configured. Use `/xp_add_admin_role` to add roles with XP admin permissions.",
                 ephemeral=True
             )
             return
 
         role_mentions = [f"<@&{rid}>" for rid in role_ids]
         await interaction.response.send_message(
-            f"**Roles that can create characters:**\n" + "\n".join(role_mentions),
+            f"**Roles with XP admin permissions:**\n" + "\n".join(role_mentions),
             ephemeral=True
         )
 
-    @bot.tree.command(name="xp_set_request_channel", description="Set channel for XP requests")
-    @app_commands.describe(channel="Channel where XP requests will be posted")
+    @bot.tree.command(name="xp_set_log_channel", description="Set channel for XP logging (requests, grants, character creation)")
+    @app_commands.describe(channel="Channel where XP activity will be logged")
     @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
-    async def xp_set_request_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    async def xp_set_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
         await db.set_xp_request_channel(guild_id, channel.id)
         await interaction.response.send_message(
-            f"✅ XP requests will now be posted in {channel.mention}.",
+            f"✅ XP activity will now be logged in {channel.mention}.",
             ephemeral=True
         )
 

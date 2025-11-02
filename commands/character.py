@@ -180,10 +180,85 @@ def setup_character_commands(bot, db, guild_id):
         # Create character
         try:
             await db.create_character(target_user_id, char_name, image_url, sheet_url)
+
+            # Respond to user
             if target_user_id == interaction.user.id:
                 await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
             else:
                 await interaction.response.send_message(f"✅ Character '{char_name}' created for {user.display_name}.", ephemeral=True)
+
+            # Send DM to the character owner
+            try:
+                character_owner = await interaction.client.fetch_user(target_user_id)
+                dm_message = (
+                    f"✅ Your character **{char_name}** has been created!\n"
+                    f"Starting XP: 0\n"
+                    f"Level: 1\n"
+                )
+                if sheet_url:
+                    dm_message += f"Character Sheet: {sheet_url}\n"
+
+                if target_user_id != interaction.user.id:
+                    dm_message += f"\nCreated by: {interaction.user.display_name}"
+
+                await character_owner.send(dm_message)
+            except discord.Forbidden:
+                logger.warning(f"Could not send DM to user {target_user_id} - DMs may be disabled")
+            except Exception as e:
+                logger.warning(f"Could not send character creation DM to user {target_user_id}: {e}")
+
+            # Post notification to request channel if configured
+            request_channel_id = await db.get_xp_request_channel(guild_id)
+            if request_channel_id:
+                request_channel = bot.get_channel(request_channel_id)
+                if request_channel:
+                    try:
+                        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                        notification_embed = discord.Embed(
+                            title=f"Character Created - {char_name}",
+                            color=discord.Color.blue(),
+                            timestamp=discord.utils.utcnow()
+                        )
+
+                        notification_embed.add_field(
+                            name="**Player**",
+                            value=f"<@{target_user_id}>",
+                            inline=False
+                        )
+
+                        notification_embed.add_field(
+                            name="**Character Name**",
+                            value=char_name,
+                            inline=True
+                        )
+
+                        notification_embed.add_field(
+                            name="**Starting XP**",
+                            value="0 XP (Level 1)",
+                            inline=True
+                        )
+
+                        if sheet_url:
+                            notification_embed.add_field(
+                                name="**Character Sheet**",
+                                value=f"[View Sheet]({sheet_url})",
+                                inline=False
+                            )
+
+                        # Add character image as thumbnail
+                        char_image_url = image_url or DEFAULT_CHARACTER_IMAGE
+                        notification_embed.set_thumbnail(url=char_image_url)
+
+                        # Show who created it (for admin creates)
+                        if target_user_id != interaction.user.id:
+                            notification_embed.set_footer(text=f"Created by {interaction.user.display_name} for {user.display_name}")
+                        else:
+                            notification_embed.set_footer(text=f"Created by {interaction.user.display_name}")
+
+                        await request_channel.send(embed=notification_embed)
+                    except Exception as e:
+                        logger.error(f"Failed to post character creation notification: {e}")
+
         except DuplicateCharacterError:
             await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
         except DatabaseError as e:

@@ -139,9 +139,10 @@ That's it! The bot should now be online.
 | `/xp_remove_hf_channel` | Disable HF tracking | `/xp_remove_hf_channel channel:#hunting` |
 | `/xp_set_cap` | Set daily RP XP cap | `/xp_set_cap amount:10` |
 | `/xp_config_hf` | Configure HF XP rates | `/xp_config_hf attempt_xp:1 success_xp:5 daily_cap:10` |
-| `/xp_add_creator_role` | Add role that can create characters | `/xp_add_creator_role role:@GameMaster` |
-| `/xp_remove_creator_role` | Remove character creation permissions | `/xp_remove_creator_role role:@GameMaster` |
-| `/xp_set_request_channel` | Set channel for XP requests | `/xp_set_request_channel channel:#xp-requests` |
+| `/xp_add_admin_role` | Add role with XP admin permissions | `/xp_add_admin_role role:@GameMaster` |
+| `/xp_remove_admin_role` | Remove XP admin permissions | `/xp_remove_admin_role role:@GameMaster` |
+| `/xp_list_admin_roles` | List roles with XP admin permissions | `/xp_list_admin_roles` |
+| `/xp_set_log_channel` | Set channel for XP activity logging | `/xp_set_log_channel channel:#xp-log` |
 
 ### Legacy Commands
 
