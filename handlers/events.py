@@ -31,6 +31,15 @@ def setup_events(bot, db, guild_id):
             logger.info(f"Synced {len(synced)} slash commands to dev guild {guild_id_env}")
         else:
             logger.info("Environment: production")
+
+            # Clear any old guild-specific commands from production bot
+            if guild_id_env:
+                guild = discord.Object(id=int(guild_id_env))
+                bot.tree.clear_commands(guild=guild)
+                await bot.tree.sync(guild=guild)
+                logger.info(f"Cleared guild-specific commands from guild {guild_id_env}")
+
+            # Sync global commands
             synced = await bot.tree.sync()
             logger.info(f"Synced {len(synced)} global slash commands")
 
