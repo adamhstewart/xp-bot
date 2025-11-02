@@ -80,7 +80,7 @@ def setup_admin_commands(bot, db, guild_id):
         character_id = char_data['id']
 
         # Award XP (bypassing daily caps since this is admin grant)
-        await db.award_xp(user_id, char_name, amount)
+        xp_result = await db.award_xp(user_id, char_name, amount)
 
         # Log the XP grant with memo
         await db.log_xp_grant(character_id, interaction.user.id, amount, memo)
@@ -90,6 +90,10 @@ def setup_admin_commands(bot, db, guild_id):
         updated_char = await db.get_character(user_id, char_name)
         new_xp = updated_char['xp']
         new_level, progress, required = get_level_and_progress(new_xp)
+
+        # Check if character leveled up
+        leveled_up = xp_result['leveled_up']
+        old_level = xp_result['old_level']
 
         # Post notification to request channel if configured
         request_channel_id = await db.get_xp_request_channel(guild_id)
@@ -179,10 +183,90 @@ def setup_admin_commands(bot, db, guild_id):
         except Exception as e:
             logger.warning(f"Could not send XP grant notification to user {user_id}: {e}")
 
+        # Send level-up notifications if character leveled up
+        if leveled_up:
+            # Send level-up notification to log channel
+            if request_channel_id:
+                request_channel = bot.get_channel(request_channel_id)
+                if request_channel:
+                    try:
+                        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                        levelup_embed = discord.Embed(
+                            title=f"🎉 Level Up! - {char_name}",
+                            description=f"**{char_name}** has reached **Level {new_level}**!",
+                            color=discord.Color.gold(),
+                            timestamp=discord.utils.utcnow()
+                        )
+
+                        levelup_embed.add_field(
+                            name="**Player**",
+                            value=f"<@{user_id}>",
+                            inline=False
+                        )
+
+                        levelup_embed.add_field(
+                            name="**Previous Level**",
+                            value=str(old_level),
+                            inline=True
+                        )
+
+                        levelup_embed.add_field(
+                            name="**New Level**",
+                            value=str(new_level),
+                            inline=True
+                        )
+
+                        levelup_embed.add_field(
+                            name="**Total XP**",
+                            value=f"{new_xp:,}",
+                            inline=False
+                        )
+
+                        # Add character sheet link if available
+                        if updated_char.get('character_sheet_url'):
+                            levelup_embed.add_field(
+                                name="**Character Sheet**",
+                                value=f"[Update Your Sheet]({updated_char['character_sheet_url']})",
+                                inline=False
+                            )
+
+                        # Add character image
+                        image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                        levelup_embed.set_thumbnail(url=image_url)
+
+                        levelup_embed.set_footer(text=f"Remember to update your character sheet!")
+
+                        await request_channel.send(embed=levelup_embed)
+                    except Exception as e:
+                        logger.error(f"Failed to post level-up notification: {e}")
+
+            # Send level-up DM
+            try:
+                character_owner = await interaction.client.fetch_user(user_id)
+                levelup_dm = (
+                    f"🎉 **Congratulations!** 🎉\n\n"
+                    f"Your character **{char_name}** has leveled up!\n\n"
+                    f"**Previous Level:** {old_level}\n"
+                    f"**New Level:** {new_level}\n"
+                    f"**Total XP:** {new_xp:,}\n\n"
+                    f"Don't forget to update your character sheet with any new abilities or improvements!"
+                )
+
+                if updated_char.get('character_sheet_url'):
+                    levelup_dm += f"\n\nCharacter Sheet: {updated_char['character_sheet_url']}"
+
+                await character_owner.send(levelup_dm)
+            except discord.Forbidden:
+                logger.warning(f"Could not send level-up DM to user {user_id} - DMs may be disabled")
+            except Exception as e:
+                logger.warning(f"Could not send level-up DM to user {user_id}: {e}")
+
         action = "Granted" if amount >= 0 else "Removed"
         response = f"✅ {action} {abs(amount)} XP {'to' if amount >= 0 else 'from'} **{char_name}** (user ID: {user_id})."
         if memo:
             response += f"\nMemo: {memo}"
+        if leveled_up:
+            response += f"\n🎉 {char_name} leveled up from {old_level} to {new_level}!"
 
         await interaction.response.send_message(response, ephemeral=True)
 
