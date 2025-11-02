@@ -254,17 +254,17 @@ class Database:
     # ==================== CHARACTER METHODS ====================
 
     @retry_on_db_error(max_attempts=2)
-    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None, character_sheet_url: Optional[str] = None) -> int:
-        """Create a new character, returns character ID"""
+    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None, character_sheet_url: Optional[str] = None, starting_xp: int = 0) -> int:
+        """Create a new character with optional starting XP, returns character ID"""
         await self.ensure_user(user_id)
 
         try:
             async with self.pool.acquire() as conn:
                 char_id = await conn.fetchval("""
                     INSERT INTO characters (user_id, name, image_url, character_sheet_url, xp, daily_xp, daily_hf, char_buffer)
-                    VALUES ($1, $2, $3, $4, 0, 0, 0, 0)
+                    VALUES ($1, $2, $3, $4, $5, 0, 0, 0)
                     RETURNING id
-                """, user_id, name, image_url, character_sheet_url)
+                """, user_id, name, image_url, character_sheet_url, starting_xp)
 
                 # Set as active character if user has no active character
                 await conn.execute("""
