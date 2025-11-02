@@ -29,7 +29,7 @@ class XPRequestView(discord.ui.View):
             return
 
         # Grant the XP
-        await self.db.award_xp(self.user_id, self.character_name, self.amount)
+        xp_result = await self.db.award_xp(self.user_id, self.character_name, self.amount)
 
         # Log the XP grant
         await self.db.log_xp_grant(self.character_id, interaction.user.id, self.amount, f"Approved request: {self.memo}")
@@ -39,6 +39,85 @@ class XPRequestView(discord.ui.View):
         updated_char = await self.db.get_character(self.user_id, self.character_name)
         new_xp = updated_char['xp']
         new_level, progress, required = get_level_and_progress(new_xp)
+
+        # Check if character leveled up
+        leveled_up = xp_result['leveled_up']
+        old_level = xp_result['old_level']
+
+        # Send level-up notification if character leveled up
+        if leveled_up:
+            # Get log channel for level-up notification
+            log_channel_id = await self.db.get_log_channel()
+            if log_channel_id:
+                log_channel = interaction.client.get_channel(log_channel_id)
+                if log_channel:
+                    from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                    level_embed = discord.Embed(
+                        title=f"🎉 Level Up! - {self.character_name}",
+                        description=f"**{self.character_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!",
+                        color=discord.Color.gold(),
+                        timestamp=discord.utils.utcnow()
+                    )
+
+                    level_embed.add_field(
+                        name="**Player**",
+                        value=f"<@{self.user_id}>",
+                        inline=True
+                    )
+
+                    level_embed.add_field(
+                        name="**Old Level**",
+                        value=str(old_level),
+                        inline=True
+                    )
+
+                    level_embed.add_field(
+                        name="**New Level**",
+                        value=str(new_level),
+                        inline=True
+                    )
+
+                    # Add character sheet link if available
+                    if updated_char.get('character_sheet_url'):
+                        level_embed.add_field(
+                            name="**Character Sheet**",
+                            value=f"[View Sheet]({updated_char['character_sheet_url']})",
+                            inline=False
+                        )
+
+                    level_embed.add_field(
+                        name="**Action Required**",
+                        value="Please update your character sheet to reflect your new level!",
+                        inline=False
+                    )
+
+                    # Add character image
+                    image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                    level_embed.set_thumbnail(url=image_url)
+
+                    level_embed.set_footer(text=f"Request approved by {interaction.user.display_name}")
+
+                    try:
+                        await log_channel.send(embed=level_embed)
+                    except Exception as e:
+                        logger.error(f"Failed to post level-up notification: {e}")
+
+            # Send DM to character owner
+            try:
+                owner = await interaction.client.fetch_user(self.user_id)
+                level_up_msg = (
+                    f"🎉 **Congratulations!** 🎉\n\n"
+                    f"Your character **{self.character_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!\n\n"
+                    f"**New Total XP:** {new_xp:,}\n"
+                )
+                if updated_char.get('character_sheet_url'):
+                    level_up_msg += f"\n**Remember to update your character sheet:** {updated_char['character_sheet_url']}"
+                else:
+                    level_up_msg += f"\n**Remember to update your character sheet!**"
+
+                await owner.send(level_up_msg)
+            except Exception as e:
+                logger.warning(f"Could not send level-up DM to user {self.user_id}: {e}")
 
         # Update the embed to show approval and new stats
         embed = interaction.message.embeds[0]

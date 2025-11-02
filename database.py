@@ -254,17 +254,17 @@ class Database:
     # ==================== CHARACTER METHODS ====================
 
     @retry_on_db_error(max_attempts=2)
-    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None, character_sheet_url: Optional[str] = None) -> int:
-        """Create a new character, returns character ID"""
+    async def create_character(self, user_id: int, name: str, image_url: Optional[str] = None, character_sheet_url: Optional[str] = None, starting_xp: int = 0) -> int:
+        """Create a new character with optional starting XP, returns character ID"""
         await self.ensure_user(user_id)
 
         try:
             async with self.pool.acquire() as conn:
                 char_id = await conn.fetchval("""
                     INSERT INTO characters (user_id, name, image_url, character_sheet_url, xp, daily_xp, daily_hf, char_buffer)
-                    VALUES ($1, $2, $3, $4, 0, 0, 0, 0)
+                    VALUES ($1, $2, $3, $4, $5, 0, 0, 0)
                     RETURNING id
-                """, user_id, name, image_url, character_sheet_url)
+                """, user_id, name, image_url, character_sheet_url, starting_xp)
 
                 # Set as active character if user has no active character
                 await conn.execute("""
@@ -522,10 +522,20 @@ class Database:
     @retry_on_db_error(max_attempts=3)
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
                        daily_xp_delta: int = 0, daily_hf_delta: int = 0,
-                       char_buffer_delta: int = 0):
-        """Award XP to a character and update daily counters"""
+                       char_buffer_delta: int = 0) -> dict:
+        """Award XP to a character and update daily counters
+        Returns dict with: old_xp, new_xp, old_level, new_level, leveled_up"""
         try:
             async with self.pool.acquire() as conn:
+                # Get old XP first
+                old_char = await conn.fetchrow("""
+                    SELECT xp FROM characters
+                    WHERE user_id = $1 AND name = $2
+                """, user_id, char_name)
+
+                old_xp = old_char['xp'] if old_char else 0
+
+                # Update XP
                 result = await conn.execute("""
                     UPDATE characters
                     SET xp = xp + $3,
@@ -536,8 +546,31 @@ class Database:
                     WHERE user_id = $1 AND name = $2
                 """, user_id, char_name, xp_amount, daily_xp_delta, daily_hf_delta, char_buffer_delta)
 
+                # Get new XP
+                new_char = await conn.fetchrow("""
+                    SELECT xp FROM characters
+                    WHERE user_id = $1 AND name = $2
+                """, user_id, char_name)
+
+                new_xp = new_char['xp'] if new_char else old_xp
+
+                # Calculate levels
+                from utils.xp import get_level_and_progress
+                old_level, _, _ = get_level_and_progress(old_xp)
+                new_level, _, _ = get_level_and_progress(new_xp)
+
+                leveled_up = new_level > old_level
+
                 if xp_amount > 0:
-                    logger.debug(f"Awarded {xp_amount} XP to '{char_name}' (user {user_id})")
+                    logger.debug(f"Awarded {xp_amount} XP to '{char_name}' (user {user_id}) - Level {old_level} -> {new_level}")
+
+                return {
+                    'old_xp': old_xp,
+                    'new_xp': new_xp,
+                    'old_level': old_level,
+                    'new_level': new_level,
+                    'leveled_up': leveled_up
+                }
         except asyncpg.PostgresError as e:
             logger.error(f"Database error awarding XP to '{char_name}' for user {user_id}: {e}")
             raise DatabaseError(f"Failed to award XP") from e

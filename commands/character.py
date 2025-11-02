@@ -6,7 +6,7 @@ import difflib
 import discord
 from discord import app_commands
 from utils.xp import get_level_and_progress
-from utils.validation import validate_character_name, validate_image_url, validate_character_sheet_url
+from utils.validation import validate_character_name, validate_image_url, validate_character_sheet_url, validate_xp_amount
 from utils.exceptions import (
     DatabaseError,
     CharacterNotFoundError,
@@ -108,10 +108,11 @@ def setup_character_commands(bot, db, guild_id):
         user="User to create character for (defaults to yourself)",
         char_name="Character name",
         sheet_url="Character sheet URL",
-        image_url="Optional image URL"
+        image_url="Optional image URL",
+        starting_xp="Starting XP amount (defaults to 0)"
     )
     @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
-    async def xp_create(interaction: discord.Interaction, user: discord.User = None, char_name: str = "", sheet_url: str = "", image_url: str = None):
+    async def xp_create(interaction: discord.Interaction, user: discord.User = None, char_name: str = "", sheet_url: str = "", image_url: str = None, starting_xp: int = 0):
         # Check required fields
         if not char_name or not char_name.strip():
             await interaction.response.send_message("❌ Character name is required.", ephemeral=True)
@@ -165,6 +166,13 @@ def setup_character_commands(bot, db, guild_id):
             logger.debug(f"Invalid character sheet URL from user {interaction.user.id}: {error_msg}")
             return
 
+        # Validate starting XP
+        is_valid, error_msg = validate_xp_amount(starting_xp, allow_negative=False)
+        if not is_valid:
+            await interaction.response.send_message(f"❌ Starting XP: {error_msg}", ephemeral=True)
+            logger.debug(f"Invalid starting XP {starting_xp} from user {interaction.user.id}: {error_msg}")
+            return
+
         await db.ensure_user(target_user_id)
 
         # Check if character already exists
@@ -179,11 +187,90 @@ def setup_character_commands(bot, db, guild_id):
 
         # Create character
         try:
-            await db.create_character(target_user_id, char_name, image_url, sheet_url)
+            await db.create_character(target_user_id, char_name, image_url, sheet_url, starting_xp)
+
+            # Calculate starting level
+            from utils.xp import get_level_and_progress
+            starting_level, _, _ = get_level_and_progress(starting_xp)
+
+            # Respond to user
             if target_user_id == interaction.user.id:
-                await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active.", ephemeral=True)
+                await interaction.response.send_message(f"✅ Character '{char_name}' created and set as active with {starting_xp:,} XP (Level {starting_level}).", ephemeral=True)
             else:
-                await interaction.response.send_message(f"✅ Character '{char_name}' created for {user.display_name}.", ephemeral=True)
+                await interaction.response.send_message(f"✅ Character '{char_name}' created for {user.display_name} with {starting_xp:,} XP (Level {starting_level}).", ephemeral=True)
+
+            # Send DM to the character owner
+            try:
+                character_owner = await interaction.client.fetch_user(target_user_id)
+                dm_message = (
+                    f"✅ Your character **{char_name}** has been created!\n"
+                    f"Starting XP: {starting_xp:,}\n"
+                    f"Level: {starting_level}\n"
+                )
+                if sheet_url:
+                    dm_message += f"Character Sheet: {sheet_url}\n"
+
+                if target_user_id != interaction.user.id:
+                    dm_message += f"\nCreated by: {interaction.user.display_name}"
+
+                await character_owner.send(dm_message)
+            except discord.Forbidden:
+                logger.warning(f"Could not send DM to user {target_user_id} - DMs may be disabled")
+            except Exception as e:
+                logger.warning(f"Could not send character creation DM to user {target_user_id}: {e}")
+
+            # Post notification to request channel if configured
+            request_channel_id = await db.get_xp_request_channel(guild_id)
+            if request_channel_id:
+                request_channel = bot.get_channel(request_channel_id)
+                if request_channel:
+                    try:
+                        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                        notification_embed = discord.Embed(
+                            title=f"Character Created - {char_name}",
+                            color=discord.Color.blue(),
+                            timestamp=discord.utils.utcnow()
+                        )
+
+                        notification_embed.add_field(
+                            name="**Player**",
+                            value=f"<@{target_user_id}>",
+                            inline=False
+                        )
+
+                        notification_embed.add_field(
+                            name="**Character Name**",
+                            value=char_name,
+                            inline=True
+                        )
+
+                        notification_embed.add_field(
+                            name="**Starting XP**",
+                            value=f"{starting_xp:,} XP (Level {starting_level})",
+                            inline=True
+                        )
+
+                        if sheet_url:
+                            notification_embed.add_field(
+                                name="**Character Sheet**",
+                                value=f"[View Sheet]({sheet_url})",
+                                inline=False
+                            )
+
+                        # Add character image as thumbnail
+                        char_image_url = image_url or DEFAULT_CHARACTER_IMAGE
+                        notification_embed.set_thumbnail(url=char_image_url)
+
+                        # Show who created it (for admin creates)
+                        if target_user_id != interaction.user.id:
+                            notification_embed.set_footer(text=f"Created by {interaction.user.display_name} for {user.display_name}")
+                        else:
+                            notification_embed.set_footer(text=f"Created by {interaction.user.display_name}")
+
+                        await request_channel.send(embed=notification_embed)
+                    except Exception as e:
+                        logger.error(f"Failed to post character creation notification: {e}")
+
         except DuplicateCharacterError:
             await interaction.response.send_message(f"❌ Character '{char_name}' already exists.", ephemeral=True)
         except DatabaseError as e:
