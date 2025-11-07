@@ -119,6 +119,29 @@ class XPRequestView(discord.ui.View):
             except Exception as e:
                 logger.warning(f"Could not send level-up DM to user {self.user_id}: {e}")
 
+        # Send XP grant notification to character owner (if not leveled up)
+        # This applies to both manual requests and auto-generated requests
+        if not leveled_up:
+            try:
+                owner = await interaction.client.fetch_user(self.user_id)
+                grant_msg = (
+                    f"✅ **XP Granted!**\n\n"
+                    f"Your character **{self.character_name}** has been awarded **{self.amount:,} XP**!\n\n"
+                    f"**New Total XP:** {new_xp:,}\n"
+                    f"**Current Level:** {new_level}\n"
+                    f"**Reason:** {self.memo}\n"
+                    f"**Approved by:** {interaction.user.display_name}"
+                )
+
+                if progress is not None:
+                    percentage = int((progress / required) * 100)
+                    grant_msg += f"\n\n**Progress to Level {new_level + 1}:** {progress:,}/{required:,} XP ({percentage}%)"
+
+                await owner.send(grant_msg)
+                logger.info(f"Sent XP grant notification to character owner {self.user_id}")
+            except Exception as e:
+                logger.warning(f"Could not send XP grant DM to character owner {self.user_id}: {e}")
+
         # Update the embed to show approval and new stats
         embed = interaction.message.embeds[0]
         embed.color = discord.Color.green()
@@ -209,18 +232,20 @@ class XPRequestView(discord.ui.View):
         except Exception as e:
             logger.error(f"Failed to post approval notification: {e}")
 
-        # Notify the requester
-        try:
-            requester = await interaction.client.fetch_user(self.requester_id)
-            await requester.send(
-                f"✅ Your XP request for **{self.character_name}** has been approved!\n"
-                f"Amount: {self.amount:,} XP\n"
-                f"New Total XP: {new_xp:,}\n"
-                f"New Level: {new_level}\n"
-                f"Approved by: {interaction.user.display_name}"
-            )
-        except:
-            logger.warning(f"Could not send approval notification to user {self.requester_id}")
+        # Notify the requester (only if different from character owner)
+        # Character owner already received a notification above
+        if self.requester_id != self.user_id:
+            try:
+                requester = await interaction.client.fetch_user(self.requester_id)
+                await requester.send(
+                    f"✅ Your XP request for **{self.character_name}** has been approved!\n"
+                    f"Amount: {self.amount:,} XP\n"
+                    f"New Total XP: {new_xp:,}\n"
+                    f"New Level: {new_level}\n"
+                    f"Approved by: {interaction.user.display_name}"
+                )
+            except:
+                logger.warning(f"Could not send approval notification to user {self.requester_id}")
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="deny_xp")
     async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):

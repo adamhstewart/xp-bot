@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS config (
     guild_id BIGINT NOT NULL,
     rp_channels BIGINT[] DEFAULT '{}',
     hf_channels BIGINT[] DEFAULT '{}',
+    survival_channels BIGINT[] DEFAULT '{}',
     char_per_rp INTEGER DEFAULT 240,
     daily_rp_cap INTEGER DEFAULT 10,
     hf_attempt_xp INTEGER DEFAULT 1,

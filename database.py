@@ -93,10 +93,10 @@ class Database:
             if not config:
                 # Create default config
                 config = await conn.fetchrow("""
-                    INSERT INTO config (guild_id, rp_channels, hf_channels, char_per_rp,
+                    INSERT INTO config (guild_id, rp_channels, hf_channels, survival_channels, char_per_rp,
                                        daily_rp_cap, hf_attempt_xp, hf_success_xp, daily_hf_cap,
                                        character_creation_roles, xp_request_channel)
-                    VALUES ($1, '{}', '{}', 240, 10, 1, 5, 10, '{}', NULL)
+                    VALUES ($1, '{}', '{}', '{}', 240, 10, 1, 5, 10, '{}', NULL)
                     RETURNING *
                 """, guild_id)
 
@@ -157,6 +157,26 @@ class Database:
             await conn.execute("""
                 UPDATE config
                 SET hf_channels = array_remove(hf_channels, $2),
+                    updated_at = NOW()
+                WHERE guild_id = $1
+            """, guild_id, channel_id)
+
+    async def add_survival_channel(self, guild_id: int, channel_id: int):
+        """Add channel to survival (prized species) tracking list"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config
+                SET survival_channels = array_append(survival_channels, $2),
+                    updated_at = NOW()
+                WHERE guild_id = $1 AND NOT ($2 = ANY(survival_channels))
+            """, guild_id, channel_id)
+
+    async def remove_survival_channel(self, guild_id: int, channel_id: int):
+        """Remove channel from survival (prized species) tracking list"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE config
+                SET survival_channels = array_remove(survival_channels, $2),
                     updated_at = NOW()
                 WHERE guild_id = $1
             """, guild_id, channel_id)

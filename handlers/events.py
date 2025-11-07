@@ -49,10 +49,10 @@ def setup_events(bot, db, guild_id):
 
     @bot.event
     async def on_message(message):
-        """Check each message to see if it should be awarded RP or HF XP"""
+        """Check each message to see if it should be awarded RP or Survival XP"""
         config = await db.get_config(guild_id)
 
-        # HF tracking (bot messages with embeds)
+        # Survival tracking (bot messages with embeds) - hunting, fishing, foraging
         if message.author.bot and message.embeds and message.channel.id in config.get("hf_channels", []):
             embed = message.embeds[0]
             title = embed.title.lower() if embed.title else ""
@@ -60,17 +60,18 @@ def setup_events(bot, db, guild_id):
             field_texts = " ".join(f"{field.name.lower()} {field.value.lower()}" for field in embed.fields)
             combined_text = f"{title} {description} {field_texts}"
 
-            logger.debug(f"HF Embed detected in #{getattr(message.channel, 'name', 'DM')} by {getattr(message.author, 'display_name', str(message.author))}")
+            logger.debug(f"Survival Embed detected in #{getattr(message.channel, 'name', 'DM')} by {getattr(message.author, 'display_name', str(message.author))}")
             logger.debug(f"Embed title: {title}")
             logger.debug(f"Embed description: {description}")
 
             is_hunting = "goes hunting" in combined_text
+            is_fishing = "goes fishing" in combined_text
             is_foraging = "goes foraging" in combined_text
             is_success = "time to harvest" in combined_text or "time to gut and harvest" in combined_text
 
-            logger.debug(f"Hunting: {is_hunting}, Foraging: {is_foraging}, Success: {is_success}")
+            logger.debug(f"Hunting: {is_hunting}, Fishing: {is_fishing}, Foraging: {is_foraging}, Success: {is_success}")
 
-            if is_hunting or is_foraging:
+            if is_hunting or is_fishing or is_foraging:
                 char_name = embed.title.split(" goes ")[0].strip()
                 logger.debug(f"Trying to match character name: '{char_name}'")
 
@@ -78,7 +79,7 @@ def setup_events(bot, db, guild_id):
                 matches = await db.find_all_characters_by_name(char_name)
 
                 if not matches:
-                    logger.warning(f"No matching character found for HF activity: '{char_name}'")
+                    logger.warning(f"No matching character found for Survival activity: '{char_name}'")
                     return
 
                 # Disambiguate if multiple matches
@@ -112,9 +113,9 @@ def setup_events(bot, db, guild_id):
 
                 char_name_actual = char_data['name']
 
-                # Check daily HF cap
+                # Check daily Survival cap
                 if char_data['daily_hf'] >= config.get('daily_hf_cap', 5):
-                    logger.debug(f"Character '{char_name_actual}' has reached daily HF cap")
+                    logger.debug(f"Character '{char_name_actual}' has reached daily Survival cap")
                     return
 
                 # Calculate XP award
@@ -125,7 +126,7 @@ def setup_events(bot, db, guild_id):
                 # Award XP
                 xp_result = await db.award_xp(user_id, char_name_actual, xp_award, daily_hf_delta=xp_award)
 
-                logger.info(f"Awarded {xp_award} HF XP to '{char_name_actual}' (user {user_id})")
+                logger.info(f"Awarded {xp_award} Survival XP to '{char_name_actual}' (user {user_id})")
 
                 # Check for level-up and send notifications
                 if xp_result['leveled_up']:
@@ -169,7 +170,7 @@ def setup_events(bot, db, guild_id):
 
                             level_embed.add_field(
                                 name="**Source**",
-                                value="Hunting/Foraging Activity",
+                                value="Survival Activity (Hunting/Fishing/Foraging)",
                                 inline=False
                             )
 
@@ -195,7 +196,7 @@ def setup_events(bot, db, guild_id):
                                 await log_channel.send(embed=level_embed)
                                 logger.info(f"Posted level-up notification for {char_name_actual} to log channel")
                             except Exception as e:
-                                logger.error(f"Failed to post HF level-up notification: {e}")
+                                logger.error(f"Failed to post Survival level-up notification: {e}")
 
                     # Send DM to character owner
                     try:
@@ -204,7 +205,7 @@ def setup_events(bot, db, guild_id):
                             f"🎉 **Congratulations!** 🎉\n\n"
                             f"Your character **{char_name_actual}** has leveled up from **Level {old_level}** to **Level {new_level}**!\n\n"
                             f"**New Total XP:** {new_xp:,}\n"
-                            f"**Source:** Hunting/Foraging Activity\n"
+                            f"**Source:** Survival Activity (Hunting/Fishing/Foraging)\n"
                         )
                         if updated_char.get('character_sheet_url'):
                             level_up_msg += f"\n**Remember to update your character sheet:** {updated_char['character_sheet_url']}"
@@ -214,7 +215,177 @@ def setup_events(bot, db, guild_id):
                         await owner.send(level_up_msg)
                         logger.info(f"Sent level-up DM to user {user_id}")
                     except Exception as e:
-                        logger.warning(f"Could not send HF level-up DM to user {user_id}: {e}")
+                        logger.warning(f"Could not send Survival level-up DM to user {user_id}: {e}")
+
+        # Prized Species XP Request tracking (bot messages with prized rewards)
+        survival_channels = config.get("survival_channels", [])
+        if message.author.bot and message.embeds and (not survival_channels or message.channel.id in survival_channels):
+            embed = message.embeds[0]
+
+            # Check for prized species awards
+            prized_detected = False
+            char_name = None
+            xp_amount = 0
+            activity_type = None
+
+            # Extract character name from title
+            if embed.title:
+                title = embed.title
+                if " goes fishing" in title:
+                    char_name = title.split(" goes fishing")[0].strip()
+                    activity_type = "fishing"
+                elif " goes hunting" in title:
+                    char_name = title.split(" goes hunting")[0].strip()
+                    activity_type = "hunting"
+                elif " goes foraging" in title:
+                    char_name = title.split(" goes foraging")[0].strip()
+                    activity_type = "foraging"
+
+            # Check embed fields for prized species awards
+            if char_name and activity_type:
+                for field in embed.fields:
+                    field_name = field.name if field.name else ""
+                    field_value = field.value if field.value else ""
+
+                    # Check for prized species indicators
+                    if "🏆 PRIZED" in field_name:
+                        prized_detected = True
+
+                        # Extract XP amounts from field value
+                        # Look for "earned **100gp**" or "**+500gp**"
+                        if "earned **100gp**" in field_value:
+                            xp_amount += 100
+                        if "**+500gp**" in field_value:
+                            xp_amount += 500
+
+                        logger.debug(f"Prized species detected: {char_name}, {activity_type}, {xp_amount} XP")
+
+            # If prized species detected, create XP request and add reactions
+            if prized_detected and xp_amount > 0:
+                try:
+                    # Add robot emoji to indicate detection
+                    await message.add_reaction("🤖")
+
+                    # Find character across all users
+                    matches = await db.find_all_characters_by_name(char_name)
+
+                    if not matches:
+                        logger.warning(f"No matching character found for prized species: '{char_name}'")
+                        await message.add_reaction("❌")
+                        return
+
+                    # Disambiguate if multiple matches
+                    if len(matches) == 1:
+                        user_id, char_data = matches[0]
+                    else:
+                        # Try to disambiguate using message mentions
+                        mentioned_user_ids = [mention.id for mention in message.mentions]
+
+                        if mentioned_user_ids:
+                            matching_mentions = [(uid, cdata) for uid, cdata in matches if uid in mentioned_user_ids]
+
+                            if len(matching_mentions) == 1:
+                                user_id, char_data = matching_mentions[0]
+                                logger.info(f"Disambiguated prized species '{char_name}' using mention: user {user_id}")
+                            else:
+                                logger.warning(f"Cannot disambiguate prized species character '{char_name}'. Skipping XP request.")
+                                await message.add_reaction("❌")
+                                return
+                        else:
+                            logger.warning(f"Cannot disambiguate prized species character '{char_name}' - no user mentions. Skipping XP request.")
+                            await message.add_reaction("❌")
+                            return
+
+                    # Get XP request channel
+                    request_channel_id = await db.get_xp_request_channel(guild_id)
+                    if not request_channel_id:
+                        logger.warning(f"XP request channel not configured, cannot create prized species XP request")
+                        await message.add_reaction("❌")
+                        return
+
+                    request_channel = bot.get_channel(request_channel_id)
+                    if not request_channel:
+                        logger.warning(f"XP request channel {request_channel_id} not found")
+                        await message.add_reaction("❌")
+                        return
+
+                    # Create XP request
+                    from utils.xp import get_level_and_progress
+                    from ui.xp_request_view import XPRequestView
+                    from ui.character_view import DEFAULT_CHARACTER_IMAGE
+
+                    char_name_actual = char_data['name']
+                    xp_current = char_data['xp']
+                    level, progress, required = get_level_and_progress(xp_current)
+
+                    # Create request embed
+                    request_embed = discord.Embed(
+                        title=f"🏆 Prized Species XP Request - {char_name_actual}",
+                        color=discord.Color.gold(),
+                        timestamp=discord.utils.utcnow()
+                    )
+
+                    request_embed.add_field(
+                        name="**Player**",
+                        value=f"<@{user_id}>",
+                        inline=False
+                    )
+
+                    request_embed.add_field(
+                        name="**Current Level**",
+                        value=str(level),
+                        inline=True
+                    )
+
+                    request_embed.add_field(
+                        name="**Current Total XP**",
+                        value=f"{xp_current:,}",
+                        inline=True
+                    )
+
+                    request_embed.add_field(
+                        name="**Requested Amount**",
+                        value=f"{xp_amount:,} XP",
+                        inline=False
+                    )
+
+                    request_embed.add_field(
+                        name="**Reason**",
+                        value=f"Prized Species ({activity_type.title()}) - Auto-detected from reward message",
+                        inline=False
+                    )
+
+                    # Add link to original message
+                    request_embed.add_field(
+                        name="**Source Message**",
+                        value=f"[Jump to Message]({message.jump_url})",
+                        inline=False
+                    )
+
+                    # Add character image
+                    image_url = char_data.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                    request_embed.set_thumbnail(url=image_url)
+
+                    request_embed.set_footer(text="Auto-generated from prized species reward")
+
+                    # Create approval view (use bot.user.id as requester since it's auto-generated)
+                    view = XPRequestView(bot.user.id, char_data['id'], char_name_actual, user_id, xp_amount,
+                                        f"Prized Species ({activity_type.title()}) - Auto-detected", db)
+
+                    # Post to request channel
+                    await request_channel.send(embed=request_embed, view=view)
+
+                    # Add green check to indicate success
+                    await message.add_reaction("✅")
+
+                    logger.info(f"Created prized species XP request for '{char_name_actual}' (user {user_id}): {xp_amount} XP from {activity_type}")
+
+                except Exception as e:
+                    logger.error(f"Failed to create prized species XP request: {e}")
+                    try:
+                        await message.add_reaction("❌")
+                    except:
+                        pass
 
         # RP tracking (user messages)
         elif not message.author.bot and message.channel.id in config.get("rp_channels", []):
