@@ -115,7 +115,7 @@ def setup_admin_commands(bot, db, guild_id):
                     )
 
                     notification_embed.add_field(
-                        name="**New Level**",
+                        name="**Level**",
                         value=str(new_level),
                         inline=True
                     )
@@ -160,24 +160,67 @@ def setup_admin_commands(bot, db, guild_id):
                 except Exception as e:
                     logger.error(f"Failed to post XP grant notification: {e}")
 
-        # Send DM to the character owner
+        # Send DM to the character owner (always sent, in addition to level-up if applicable)
         try:
             character_owner = await interaction.client.fetch_user(user_id)
-            action_emoji = "✅" if amount >= 0 else "⚠️"
-            action_word = "granted to" if amount >= 0 else "removed from"
 
-            dm_message = (
-                f"{action_emoji} XP has been {action_word} **{char_name}**!\n"
-                f"Amount: {abs(amount):,} XP\n"
-                f"New Total XP: {new_xp:,}\n"
-                f"New Level: {new_level}\n"
-                f"Granted by: {interaction.user.display_name}"
+            # Create DM embed matching the log channel format
+            from ui.character_view import DEFAULT_CHARACTER_IMAGE
+            dm_embed = discord.Embed(
+                title=f"XP Granted - {char_name}",
+                color=discord.Color.green() if amount >= 0 else discord.Color.orange(),
+                timestamp=discord.utils.utcnow()
             )
 
-            if memo:
-                dm_message += f"\nReason: {memo}"
+            dm_embed.add_field(
+                name="**Player**",
+                value=f"<@{user_id}>",
+                inline=False
+            )
 
-            await character_owner.send(dm_message)
+            dm_embed.add_field(
+                name="**Level**",
+                value=str(new_level),
+                inline=True
+            )
+
+            dm_embed.add_field(
+                name="**New Total XP**",
+                value=f"{new_xp:,}",
+                inline=True
+            )
+
+            action_text = "Granted" if amount >= 0 else "Removed"
+            dm_embed.add_field(
+                name=f"**Amount {action_text}**",
+                value=f"{abs(amount):,} XP",
+                inline=False
+            )
+
+            if progress is not None:
+                percentage = int((progress / required) * 100)
+                bar = int((progress / required) * 20)
+                progress_text = f"`[{'█'*bar}{'-'*(20-bar)}]` {progress}/{required} ({percentage}%)"
+                dm_embed.add_field(
+                    name="**Current Level Progress**",
+                    value=progress_text,
+                    inline=False
+                )
+
+            if memo:
+                dm_embed.add_field(
+                    name="**Reason**",
+                    value=memo,
+                    inline=False
+                )
+
+            # Add character image
+            image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+            dm_embed.set_thumbnail(url=image_url)
+
+            dm_embed.set_footer(text=f"Granted by {interaction.user.display_name}")
+
+            await character_owner.send(embed=dm_embed)
         except discord.Forbidden:
             logger.warning(f"Could not send DM to user {user_id} - DMs may be disabled")
         except Exception as e:
@@ -243,19 +286,67 @@ def setup_admin_commands(bot, db, guild_id):
             # Send level-up DM
             try:
                 character_owner = await interaction.client.fetch_user(user_id)
-                levelup_dm = (
-                    f"🎉 **Congratulations!** 🎉\n\n"
-                    f"Your character **{char_name}** has leveled up!\n\n"
-                    f"**Previous Level:** {old_level}\n"
-                    f"**New Level:** {new_level}\n"
-                    f"**Total XP:** {new_xp:,}\n\n"
-                    f"Don't forget to update your character sheet with any new abilities or improvements!"
+
+                # Create rich embed for level-up DM
+                from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                levelup_dm_embed = discord.Embed(
+                    title=f"🎉 Level Up! - {char_name}",
+                    description=f"**{char_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!",
+                    color=discord.Color.gold(),
+                    timestamp=discord.utils.utcnow()
                 )
 
-                if updated_char.get('character_sheet_url'):
-                    levelup_dm += f"\n\nCharacter Sheet: {updated_char['character_sheet_url']}"
+                levelup_dm_embed.add_field(
+                    name="**Player**",
+                    value=f"<@{user_id}>",
+                    inline=False
+                )
 
-                await character_owner.send(levelup_dm)
+                levelup_dm_embed.add_field(
+                    name="**Old Level**",
+                    value=str(old_level),
+                    inline=True
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**New Level**",
+                    value=str(new_level),
+                    inline=True
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**New Total XP**",
+                    value=f"{new_xp:,}",
+                    inline=False
+                )
+
+                if memo:
+                    levelup_dm_embed.add_field(
+                        name="**Reason**",
+                        value=memo,
+                        inline=False
+                    )
+
+                if updated_char.get('character_sheet_url'):
+                    levelup_dm_embed.add_field(
+                        name="**Action Required**",
+                        value=f"Please update your [character sheet]({updated_char['character_sheet_url']}) to reflect your new level!",
+                        inline=False
+                    )
+                else:
+                    levelup_dm_embed.add_field(
+                        name="**Action Required**",
+                        value="Please update your character sheet to reflect your new level!",
+                        inline=False
+                    )
+
+                # Add character image
+                image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                levelup_dm_embed.set_thumbnail(url=image_url)
+
+                levelup_dm_embed.set_footer(text=f"Granted by {interaction.user.display_name}")
+
+                await character_owner.send(embed=levelup_dm_embed)
             except discord.Forbidden:
                 logger.warning(f"Could not send level-up DM to user {user_id} - DMs may be disabled")
             except Exception as e:

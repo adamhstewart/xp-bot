@@ -201,18 +201,64 @@ def setup_events(bot, db, guild_id):
                     # Send DM to character owner
                     try:
                         owner = await bot.fetch_user(user_id)
-                        level_up_msg = (
-                            f"🎉 **Congratulations!** 🎉\n\n"
-                            f"Your character **{char_name_actual}** has leveled up from **Level {old_level}** to **Level {new_level}**!\n\n"
-                            f"**New Total XP:** {new_xp:,}\n"
-                            f"**Source:** Survival Activity (Hunting/Fishing/Foraging)\n"
-                        )
-                        if updated_char.get('character_sheet_url'):
-                            level_up_msg += f"\n**Remember to update your character sheet:** {updated_char['character_sheet_url']}"
-                        else:
-                            level_up_msg += f"\n**Remember to update your character sheet!**"
 
-                        await owner.send(level_up_msg)
+                        # Create rich embed for level-up DM
+                        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                        levelup_dm_embed = discord.Embed(
+                            title=f"🎉 Level Up! - {char_name_actual}",
+                            description=f"**{char_name_actual}** has leveled up from **Level {old_level}** to **Level {new_level}**!",
+                            color=discord.Color.gold(),
+                            timestamp=discord.utils.utcnow()
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Player**",
+                            value=f"<@{user_id}>",
+                            inline=False
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Old Level**",
+                            value=str(old_level),
+                            inline=True
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**New Level**",
+                            value=str(new_level),
+                            inline=True
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**New Total XP**",
+                            value=f"{new_xp:,}",
+                            inline=False
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Source**",
+                            value="Survival Activity (Hunting/Fishing/Foraging)",
+                            inline=False
+                        )
+
+                        if updated_char.get('character_sheet_url'):
+                            levelup_dm_embed.add_field(
+                                name="**Action Required**",
+                                value=f"Please update your [character sheet]({updated_char['character_sheet_url']}) to reflect your new level!",
+                                inline=False
+                            )
+                        else:
+                            levelup_dm_embed.add_field(
+                                name="**Action Required**",
+                                value="Please update your character sheet to reflect your new level!",
+                                inline=False
+                            )
+
+                        # Add character image
+                        image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                        levelup_dm_embed.set_thumbnail(url=image_url)
+
+                        await owner.send(embed=levelup_dm_embed)
                         logger.info(f"Sent level-up DM to user {user_id}")
                     except Exception as e:
                         logger.warning(f"Could not send Survival level-up DM to user {user_id}: {e}")
@@ -320,8 +366,8 @@ def setup_events(bot, db, guild_id):
 
                     # Create request embed
                     request_embed = discord.Embed(
-                        title=f"🏆 Prized Species XP Request - {char_name_actual}",
-                        color=discord.Color.gold(),
+                        title=f"XP Request - {char_name_actual}",
+                        color=discord.Color.blue(),
                         timestamp=discord.utils.utcnow()
                     )
 
@@ -497,18 +543,64 @@ def setup_events(bot, db, guild_id):
                     # Send DM to character owner
                     try:
                         owner = await bot.fetch_user(user_id)
-                        level_up_msg = (
-                            f"🎉 **Congratulations!** 🎉\n\n"
-                            f"Your character **{char_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!\n\n"
-                            f"**New Total XP:** {new_xp:,}\n"
-                            f"**Source:** Roleplay Activity\n"
-                        )
-                        if updated_char.get('character_sheet_url'):
-                            level_up_msg += f"\n**Remember to update your character sheet:** {updated_char['character_sheet_url']}"
-                        else:
-                            level_up_msg += f"\n**Remember to update your character sheet!**"
 
-                        await owner.send(level_up_msg)
+                        # Create rich embed for level-up DM
+                        from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                        levelup_dm_embed = discord.Embed(
+                            title=f"🎉 Level Up! - {char_name}",
+                            description=f"**{char_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!",
+                            color=discord.Color.gold(),
+                            timestamp=discord.utils.utcnow()
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Player**",
+                            value=f"<@{user_id}>",
+                            inline=False
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Old Level**",
+                            value=str(old_level),
+                            inline=True
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**New Level**",
+                            value=str(new_level),
+                            inline=True
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**New Total XP**",
+                            value=f"{new_xp:,}",
+                            inline=False
+                        )
+
+                        levelup_dm_embed.add_field(
+                            name="**Source**",
+                            value="Roleplay Activity",
+                            inline=False
+                        )
+
+                        if updated_char.get('character_sheet_url'):
+                            levelup_dm_embed.add_field(
+                                name="**Action Required**",
+                                value=f"Please update your [character sheet]({updated_char['character_sheet_url']}) to reflect your new level!",
+                                inline=False
+                            )
+                        else:
+                            levelup_dm_embed.add_field(
+                                name="**Action Required**",
+                                value="Please update your character sheet to reflect your new level!",
+                                inline=False
+                            )
+
+                        # Add character image
+                        image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                        levelup_dm_embed.set_thumbnail(url=image_url)
+
+                        await owner.send(embed=levelup_dm_embed)
                         logger.info(f"Sent level-up DM to user {user_id}")
                     except Exception as e:
                         logger.warning(f"Could not send RP level-up DM to user {user_id}: {e}")

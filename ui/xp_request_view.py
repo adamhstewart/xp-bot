@@ -105,42 +105,132 @@ class XPRequestView(discord.ui.View):
             # Send DM to character owner
             try:
                 owner = await interaction.client.fetch_user(self.user_id)
-                level_up_msg = (
-                    f"🎉 **Congratulations!** 🎉\n\n"
-                    f"Your character **{self.character_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!\n\n"
-                    f"**New Total XP:** {new_xp:,}\n"
-                )
-                if updated_char.get('character_sheet_url'):
-                    level_up_msg += f"\n**Remember to update your character sheet:** {updated_char['character_sheet_url']}"
-                else:
-                    level_up_msg += f"\n**Remember to update your character sheet!**"
 
-                await owner.send(level_up_msg)
+                # Create rich embed for level-up DM
+                from ui.character_view import DEFAULT_CHARACTER_IMAGE
+                levelup_dm_embed = discord.Embed(
+                    title=f"🎉 Level Up! - {self.character_name}",
+                    description=f"**{self.character_name}** has leveled up from **Level {old_level}** to **Level {new_level}**!",
+                    color=discord.Color.gold(),
+                    timestamp=discord.utils.utcnow()
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**Player**",
+                    value=f"<@{self.user_id}>",
+                    inline=False
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**Old Level**",
+                    value=str(old_level),
+                    inline=True
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**New Level**",
+                    value=str(new_level),
+                    inline=True
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**New Total XP**",
+                    value=f"{new_xp:,}",
+                    inline=False
+                )
+
+                levelup_dm_embed.add_field(
+                    name="**Reason**",
+                    value=f"{self.memo}",
+                    inline=False
+                )
+
+                if updated_char.get('character_sheet_url'):
+                    levelup_dm_embed.add_field(
+                        name="**Action Required**",
+                        value=f"Please update your [character sheet]({updated_char['character_sheet_url']}) to reflect your new level!",
+                        inline=False
+                    )
+                else:
+                    levelup_dm_embed.add_field(
+                        name="**Action Required**",
+                        value="Please update your character sheet to reflect your new level!",
+                        inline=False
+                    )
+
+                # Add character image
+                image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+                levelup_dm_embed.set_thumbnail(url=image_url)
+
+                levelup_dm_embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+
+                await owner.send(embed=levelup_dm_embed)
             except Exception as e:
                 logger.warning(f"Could not send level-up DM to user {self.user_id}: {e}")
 
-        # Send XP grant notification to character owner (if not leveled up)
+        # Send XP grant notification to character owner (always sent, in addition to level-up if applicable)
         # This applies to both manual requests and auto-generated requests
-        if not leveled_up:
-            try:
-                owner = await interaction.client.fetch_user(self.user_id)
-                grant_msg = (
-                    f"✅ **XP Granted!**\n\n"
-                    f"Your character **{self.character_name}** has been awarded **{self.amount:,} XP**!\n\n"
-                    f"**New Total XP:** {new_xp:,}\n"
-                    f"**Current Level:** {new_level}\n"
-                    f"**Reason:** {self.memo}\n"
-                    f"**Approved by:** {interaction.user.display_name}"
+        try:
+            owner = await interaction.client.fetch_user(self.user_id)
+
+            # Create DM embed matching the log channel format
+            from ui.character_view import DEFAULT_CHARACTER_IMAGE
+            dm_embed = discord.Embed(
+                title=f"XP Granted - {self.character_name}",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+
+            dm_embed.add_field(
+                name="**Player**",
+                value=f"<@{self.user_id}>",
+                inline=False
+            )
+
+            dm_embed.add_field(
+                name="**Level**",
+                value=str(new_level),
+                inline=True
+            )
+
+            dm_embed.add_field(
+                name="**New Total XP**",
+                value=f"{new_xp:,}",
+                inline=True
+            )
+
+            dm_embed.add_field(
+                name="**Amount Granted**",
+                value=f"{self.amount:,} XP",
+                inline=False
+            )
+
+            if progress is not None:
+                percentage = int((progress / required) * 100)
+                bar = int((progress / required) * 20)
+                progress_text = f"`[{'█'*bar}{'-'*(20-bar)}]` {progress}/{required} ({percentage}%)"
+                dm_embed.add_field(
+                    name="**Current Level Progress**",
+                    value=progress_text,
+                    inline=False
                 )
 
-                if progress is not None:
-                    percentage = int((progress / required) * 100)
-                    grant_msg += f"\n\n**Progress to Level {new_level + 1}:** {progress:,}/{required:,} XP ({percentage}%)"
+            dm_embed.add_field(
+                name="**Reason**",
+                value=f"{self.memo}",
+                inline=False
+            )
 
-                await owner.send(grant_msg)
-                logger.info(f"Sent XP grant notification to character owner {self.user_id}")
-            except Exception as e:
-                logger.warning(f"Could not send XP grant DM to character owner {self.user_id}: {e}")
+            # Add character image
+            image_url = updated_char.get("image_url") or DEFAULT_CHARACTER_IMAGE
+            dm_embed.set_thumbnail(url=image_url)
+
+            dm_embed.set_footer(text=f"Approved by {interaction.user.display_name}")
+
+            await owner.send(embed=dm_embed)
+            logger.info(f"Sent XP grant notification to character owner {self.user_id}")
+        except Exception as e:
+            logger.warning(f"Could not send XP grant DM to character owner {self.user_id}: {e}")
 
         # Update the embed to show approval and new stats
         embed = interaction.message.embeds[0]
@@ -188,7 +278,7 @@ class XPRequestView(discord.ui.View):
         )
 
         notification_embed.add_field(
-            name="**New Level**",
+            name="**Level**",
             value=str(new_level),
             inline=True
         )

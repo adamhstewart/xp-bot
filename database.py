@@ -215,6 +215,15 @@ class Database:
         config = await self.get_config(guild_id)
         return config.get('xp_request_channel')
 
+    async def get_log_channel(self) -> Optional[int]:
+        """Get the log channel ID (XP request channel) for the first configured guild
+        This is a helper method for code that doesn't have access to guild_id"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval(
+                "SELECT xp_request_channel FROM config LIMIT 1"
+            )
+            return result
+
     # ==================== USER METHODS ====================
 
     async def ensure_user(self, user_id: int) -> Dict:
