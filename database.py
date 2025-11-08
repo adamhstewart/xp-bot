@@ -93,10 +93,9 @@ class Database:
             if not config:
                 # Create default config
                 config = await conn.fetchrow("""
-                    INSERT INTO config (guild_id, rp_channels, hf_channels, survival_channels, char_per_rp,
-                                       daily_rp_cap, hf_attempt_xp, hf_success_xp, daily_hf_cap,
-                                       character_creation_roles, xp_request_channel)
-                    VALUES ($1, '{}', '{}', '{}', 240, 10, 1, 5, 10, '{}', NULL)
+                    INSERT INTO config (guild_id, rp_channels, survival_channels, char_per_rp,
+                                       daily_rp_cap, character_creation_roles, xp_request_channel)
+                    VALUES ($1, '{}', '{}', 240, 10, '{}', NULL)
                     RETURNING *
                 """, guild_id)
 
@@ -137,26 +136,6 @@ class Database:
             await conn.execute("""
                 UPDATE config
                 SET rp_channels = array_remove(rp_channels, $2),
-                    updated_at = NOW()
-                WHERE guild_id = $1
-            """, guild_id, channel_id)
-
-    async def add_hf_channel(self, guild_id: int, channel_id: int):
-        """Add channel to HF tracking list"""
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE config
-                SET hf_channels = array_append(hf_channels, $2),
-                    updated_at = NOW()
-                WHERE guild_id = $1 AND NOT ($2 = ANY(hf_channels))
-            """, guild_id, channel_id)
-
-    async def remove_hf_channel(self, guild_id: int, channel_id: int):
-        """Remove channel from HF tracking list"""
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE config
-                SET hf_channels = array_remove(hf_channels, $2),
                     updated_at = NOW()
                 WHERE guild_id = $1
             """, guild_id, channel_id)
@@ -290,8 +269,8 @@ class Database:
         try:
             async with self.pool.acquire() as conn:
                 char_id = await conn.fetchval("""
-                    INSERT INTO characters (user_id, name, image_url, character_sheet_url, xp, daily_xp, daily_hf, char_buffer)
-                    VALUES ($1, $2, $3, $4, $5, 0, 0, 0)
+                    INSERT INTO characters (user_id, name, image_url, character_sheet_url, xp, daily_xp, char_buffer)
+                    VALUES ($1, $2, $3, $4, $5, 0, 0)
                     RETURNING id
                 """, user_id, name, image_url, character_sheet_url, starting_xp)
 
@@ -550,8 +529,7 @@ class Database:
 
     @retry_on_db_error(max_attempts=3)
     async def award_xp(self, user_id: int, char_name: str, xp_amount: int,
-                       daily_xp_delta: int = 0, daily_hf_delta: int = 0,
-                       char_buffer_delta: int = 0) -> dict:
+                       daily_xp_delta: int = 0, char_buffer_delta: int = 0) -> dict:
         """Award XP to a character and update daily counters
         Returns dict with: old_xp, new_xp, old_level, new_level, leveled_up"""
         try:
@@ -569,11 +547,10 @@ class Database:
                     UPDATE characters
                     SET xp = xp + $3,
                         daily_xp = daily_xp + $4,
-                        daily_hf = daily_hf + $5,
-                        char_buffer = char_buffer + $6,
+                        char_buffer = char_buffer + $5,
                         updated_at = NOW()
                     WHERE user_id = $1 AND name = $2
-                """, user_id, char_name, xp_amount, daily_xp_delta, daily_hf_delta, char_buffer_delta)
+                """, user_id, char_name, xp_amount, daily_xp_delta, char_buffer_delta)
 
                 # Get new XP
                 new_char = await conn.fetchrow("""
@@ -613,7 +590,6 @@ class Database:
             await conn.execute("""
                 UPDATE characters
                 SET daily_xp = 0,
-                    daily_hf = 0,
                     char_buffer = 0,
                     updated_at = NOW()
                 WHERE user_id = $1

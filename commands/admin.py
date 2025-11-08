@@ -421,28 +421,6 @@ def setup_admin_commands(bot, db, guild_id):
         await db.remove_rp_channel(guild_id, channel.id)
         await interaction.response.send_message(f"🚫 RP XP tracking disabled in {channel.mention}.", ephemeral=True)
 
-    @bot.tree.command(name="xp_add_hf_channel")
-    @app_commands.describe(channel="Channel to enable for survival (hunting/fishing/foraging) XP tracking")
-    @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_add_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        await db.add_hf_channel(guild_id, channel.id)
-        await interaction.response.send_message(f"✅ Channel {channel.mention} added for survival (hunting/fishing/foraging) XP tracking.", ephemeral=True)
-
-    @bot.tree.command(name="xp_remove_hf_channel")
-    @app_commands.describe(channel="Channel to disable survival tracking")
-    @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_remove_hf_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        await db.remove_hf_channel(guild_id, channel.id)
-        await interaction.response.send_message(f"🚫 Survival XP tracking disabled in {channel.mention}.", ephemeral=True)
-
     @bot.tree.command(name="xp_add_survival_channel")
     @app_commands.describe(channel="Channel to monitor for prized species rewards")
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
@@ -464,41 +442,6 @@ def setup_admin_commands(bot, db, guild_id):
 
         await db.remove_survival_channel(guild_id, channel.id)
         await interaction.response.send_message(f"🚫 Prized species monitoring disabled in {channel.mention}.", ephemeral=True)
-
-    @bot.tree.command(name="xp_config_hf")
-    @app_commands.describe(attempt_xp="XP per survival attempt", success_xp="XP per success", daily_cap="Max XP from survival per day")
-    @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
-    async def xp_config_hf(interaction: discord.Interaction, attempt_xp: int, success_xp: int, daily_cap: int):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        # Validate XP amounts (must be non-negative)
-        is_valid, error_msg = validate_xp_amount(attempt_xp)
-        if not is_valid:
-            await interaction.response.send_message(f"❌ Attempt XP: {error_msg}", ephemeral=True)
-            return
-
-        is_valid, error_msg = validate_xp_amount(success_xp)
-        if not is_valid:
-            await interaction.response.send_message(f"❌ Success XP: {error_msg}", ephemeral=True)
-            return
-
-        # Validate daily cap
-        is_valid, error_msg = validate_daily_cap(daily_cap)
-        if not is_valid:
-            await interaction.response.send_message(f"❌ Daily cap: {error_msg}", ephemeral=True)
-            return
-
-        await db.update_config(
-            guild_id,
-            hf_attempt_xp=attempt_xp,
-            hf_success_xp=success_xp,
-            daily_hf_cap=daily_cap
-        )
-        await interaction.response.send_message(
-            f"✅ Survival XP updated: {attempt_xp}/attempt, {success_xp}/success, daily cap: {daily_cap}.", ephemeral=True
-        )
 
     @bot.tree.command(name="xp_set_cap")
     @app_commands.describe(amount="New daily XP cap")
@@ -591,12 +534,10 @@ def setup_admin_commands(bot, db, guild_id):
 
         config = await db.get_config(guild_id)
         rp_channels = ", ".join(f"<#{cid}>" for cid in config.get("rp_channels", [])) or "None"
-        hf_channels = ", ".join(f"<#{cid}>" for cid in config.get("hf_channels", [])) or "None"
         survival_channels = ", ".join(f"<#{cid}>" for cid in config.get("survival_channels", [])) or "None (monitors all channels)"
 
         embed = discord.Embed(title="XP Bot Settings Overview")
         embed.add_field(name="RP Settings", value=f"Channels: {rp_channels}\nChars per XP: {config['char_per_rp']}\nDaily RP Cap: {config['daily_rp_cap']}", inline=False)
-        embed.add_field(name="Survival Settings", value=f"Channels: {hf_channels}\nXP per Attempt: {config['hf_attempt_xp']}\nXP per Success: {config['hf_success_xp']}\nDaily Survival Cap: {config['daily_hf_cap']}", inline=False)
         embed.add_field(name="Prized Species Settings", value=f"Monitor Channels: {survival_channels}", inline=False)
 
         await ctx.send(embed=embed, view=XPSettingsView(bot, db, guild_id))
