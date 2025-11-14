@@ -670,3 +670,181 @@ class Database:
         except asyncpg.PostgresError as e:
             logger.error(f"Database error updating character '{old_name}' for user {user_id}: {e}")
             raise DatabaseError(f"Failed to update character") from e
+
+    # ==================== QUEST METHODS ====================
+
+    async def create_quest(self, guild_id: int, name: str, quest_type: str,
+                          start_date: date, primary_dm_user_id: int) -> int:
+        """Create a new quest and return its ID"""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Create quest
+                quest_id = await conn.fetchval("""
+                    INSERT INTO quests (guild_id, name, quest_type, start_date, status)
+                    VALUES ($1, $2, $3, $4, 'active')
+                    RETURNING id
+                """, guild_id, name, quest_type, start_date)
+
+                # Add primary DM
+                await conn.execute("""
+                    INSERT INTO quest_dms (quest_id, user_id, is_primary)
+                    VALUES ($1, $2, TRUE)
+                """, quest_id, primary_dm_user_id)
+
+                logger.info(f"Created quest '{name}' (ID: {quest_id}) for guild {guild_id}")
+                return quest_id
+
+    async def add_quest_participant(self, quest_id: int, character_id: int,
+                                   starting_level: int, starting_xp: int):
+        """Add a PC to a quest with their starting level/XP frozen"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO quest_participants (quest_id, character_id, starting_level, starting_xp)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (quest_id, character_id) DO NOTHING
+            """, quest_id, character_id, starting_level, starting_xp)
+
+    async def add_quest_dm(self, quest_id: int, user_id: int, is_primary: bool = False):
+        """Add a DM to a quest"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO quest_dms (quest_id, user_id, is_primary)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (quest_id, user_id) DO NOTHING
+            """, quest_id, user_id, is_primary)
+
+    async def get_quest(self, quest_id: int) -> Optional[Dict]:
+        """Get quest details by ID"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                SELECT * FROM quests WHERE id = $1
+            """, quest_id)
+            return dict(result) if result else None
+
+    async def get_active_quests(self, guild_id: int) -> List[Dict]:
+        """Get all active quests for a guild"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT * FROM quests
+                WHERE guild_id = $1 AND status = 'active'
+                ORDER BY start_date DESC, created_at DESC
+            """, guild_id)
+            return [dict(r) for r in results]
+
+    async def get_quest_participants(self, quest_id: int) -> List[Dict]:
+        """Get all participants (PCs) in a quest with character details"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT qp.*, c.name as character_name, c.user_id
+                FROM quest_participants qp
+                JOIN characters c ON qp.character_id = c.id
+                WHERE qp.quest_id = $1
+                ORDER BY qp.joined_at
+            """, quest_id)
+            return [dict(r) for r in results]
+
+    async def get_quest_dms(self, quest_id: int) -> List[Dict]:
+        """Get all DMs for a quest"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT * FROM quest_dms
+                WHERE quest_id = $1
+                ORDER BY is_primary DESC, joined_at
+            """, quest_id)
+            return [dict(r) for r in results]
+
+    async def add_quest_monster(self, quest_id: int, cr: str,
+                               monster_name: str = None, count: int = 1):
+        """Add a monster/encounter to a quest"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO quest_monsters (quest_id, monster_name, cr, count)
+                VALUES ($1, $2, $3, $4)
+            """, quest_id, monster_name, cr, count)
+
+    async def get_quest_monsters(self, quest_id: int) -> List[Dict]:
+        """Get all monsters/encounters for a quest"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT * FROM quest_monsters
+                WHERE quest_id = $1
+                ORDER BY added_at
+            """, quest_id)
+            return [dict(r) for r in results]
+
+    async def complete_quest(self, quest_id: int, end_date: date) -> bool:
+        """Mark a quest as completed"""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE quests
+                SET status = 'completed', end_date = $2, updated_at = NOW()
+                WHERE id = $1 AND status = 'active'
+            """, quest_id, end_date)
+            # Check if any rows were updated
+            return result.split()[-1] != '0'
+
+    async def get_character_active_quests(self, character_id: int) -> List[Dict]:
+        """Get all active quests a character is participating in"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT q.* FROM quests q
+                JOIN quest_participants qp ON q.id = qp.quest_id
+                WHERE qp.character_id = $1 AND q.status = 'active'
+                ORDER BY q.start_date DESC
+            """, character_id)
+            return [dict(r) for r in results]
+
+    async def search_active_quests(self, guild_id: int, search_term: str, limit: int = 25) -> List[str]:
+        """Search active quest names for autocomplete"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT name FROM quests
+                WHERE guild_id = $1 AND status = 'active'
+                AND LOWER(name) LIKE LOWER($2)
+                ORDER BY start_date DESC
+                LIMIT $3
+            """, guild_id, f"%{search_term}%", limit)
+            return [r['name'] for r in results]
+
+    async def get_quest_by_name(self, guild_id: int, name: str) -> Optional[Dict]:
+        """Get active quest by exact name match"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                SELECT * FROM quests
+                WHERE guild_id = $1 AND name = $2 AND status = 'active'
+            """, guild_id, name)
+            return dict(result) if result else None
+
+    async def get_quest_by_name_any_status(self, guild_id: int, name: str) -> Optional[Dict]:
+        """Get quest by exact name match (any status)"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                SELECT * FROM quests
+                WHERE guild_id = $1 AND name = $2
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, guild_id, name)
+            return dict(result) if result else None
+
+    async def search_completed_quests(self, guild_id: int, search_term: str, limit: int = 25) -> List[str]:
+        """Search completed quest names for autocomplete"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT name FROM quests
+                WHERE guild_id = $1 AND status = 'completed'
+                AND LOWER(name) LIKE LOWER($2)
+                ORDER BY end_date DESC
+                LIMIT $3
+            """, guild_id, f"%{search_term}%", limit)
+            return [r['name'] for r in results]
+
+    async def get_completed_quest_by_name(self, guild_id: int, name: str) -> Optional[Dict]:
+        """Get completed quest by exact name match"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                SELECT * FROM quests
+                WHERE guild_id = $1 AND name = $2 AND status = 'completed'
+                ORDER BY end_date DESC
+                LIMIT 1
+            """, guild_id, name)
+            return dict(result) if result else None
