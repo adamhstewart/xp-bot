@@ -421,28 +421,6 @@ def setup_admin_commands(bot, db, guild_id):
         await db.remove_rp_channel(guild_id, channel.id)
         await interaction.response.send_message(f"🚫 RP XP tracking disabled in {channel.mention}.", ephemeral=True)
 
-    @bot.tree.command(name="xp_add_survival_channel")
-    @app_commands.describe(channel="Channel to monitor for prized species rewards")
-    @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_add_survival_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        await db.add_survival_channel(guild_id, channel.id)
-        await interaction.response.send_message(f"✅ Channel {channel.mention} will be monitored for prized species rewards (auto XP requests).", ephemeral=True)
-
-    @bot.tree.command(name="xp_remove_survival_channel")
-    @app_commands.describe(channel="Channel to stop monitoring for prized species")
-    @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
-    async def xp_remove_survival_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        await db.remove_survival_channel(guild_id, channel.id)
-        await interaction.response.send_message(f"🚫 Prized species monitoring disabled in {channel.mention}.", ephemeral=True)
-
     @bot.tree.command(name="xp_set_cap")
     @app_commands.describe(amount="New daily XP cap")
     @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
