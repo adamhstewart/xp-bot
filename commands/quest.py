@@ -9,9 +9,19 @@ from datetime import date, datetime
 from typing import Optional, List
 from utils.xp import get_level_and_progress
 from utils.quest_xp import calculate_quest_xp
-from ui.quest_view import QuestEndConfirmView
+from ui.quest_view import QuestEndConfirmView, QuestDeleteConfirmView
 
 logger = logging.getLogger('xp-bot')
+
+
+def is_level_in_bracket(level: int, bracket: str) -> bool:
+    """Check if a character level is within a level bracket"""
+    try:
+        # Parse bracket string (e.g., "3-4", "5-7", "17-20")
+        min_level, max_level = map(int, bracket.split('-'))
+        return min_level <= level <= max_level
+    except (ValueError, AttributeError):
+        return False
 
 
 def setup_quest_commands(bot, db, guild_id):
@@ -75,17 +85,50 @@ def setup_quest_commands(bot, db, guild_id):
             logger.error(f"Error in all characters autocomplete: {e}")
             return []
 
+    async def user_characters_autocomplete(interaction: discord.Interaction, current: str):
+        """Autocomplete for user's own character names"""
+        try:
+            user_id = interaction.user.id
+            await db.ensure_user(user_id)
+            characters = await db.list_characters(user_id)
+
+            # Filter by current input
+            filtered = [c for c in characters if current.lower() in c['name'].lower()]
+            return [
+                app_commands.Choice(name=c['name'], value=c['name'])
+                for c in filtered[:25]
+            ]
+        except Exception as e:
+            logger.error(f"Error in user characters autocomplete: {e}")
+            return []
+
     @bot.tree.command(name="quest_start", description="[DM] Start a new quest")
     @app_commands.describe(
         quest_name="Name of the quest",
-        quest_type="Type of quest (e.g., 'Main Quest', 'Side Quest', 'One-Shot')",
+        quest_type="Type of quest",
+        level_bracket="Level bracket for the quest",
         start_date="Start date (YYYY-MM-DD format, defaults to today)",
         primary_dm="Primary DM for the quest (defaults to you)"
     )
+    @app_commands.choices(quest_type=[
+        app_commands.Choice(name="Campaign", value="Campaign"),
+        app_commands.Choice(name="Mission", value="Mission"),
+        app_commands.Choice(name="Colosseum", value="Colosseum"),
+        app_commands.Choice(name="Battle", value="Battle")
+    ])
+    @app_commands.choices(level_bracket=[
+        app_commands.Choice(name="3-4", value="3-4"),
+        app_commands.Choice(name="5-7", value="5-7"),
+        app_commands.Choice(name="8-10", value="8-10"),
+        app_commands.Choice(name="11-13", value="11-13"),
+        app_commands.Choice(name="14-16", value="14-16"),
+        app_commands.Choice(name="17-20", value="17-20")
+    ])
     async def quest_start(
         interaction: discord.Interaction,
         quest_name: str,
         quest_type: str,
+        level_bracket: str,
         start_date: Optional[str] = None,
         primary_dm: Optional[discord.User] = None
     ):
@@ -144,6 +187,7 @@ def setup_quest_commands(bot, db, guild_id):
         dm_mention = dm_user.mention if dm_user.id != interaction.user.id else "You"
         await interaction.response.send_message(
             f"Setting up quest **{quest_name}** ({quest_type})\n"
+            f"Level Bracket: {level_bracket}\n"
             f"Start date: {quest_start_date}\n"
             f"Primary DM: {dm_mention}\n\n"
             f"Use `/quest_add_pc` to add player characters to this quest.\n"
@@ -157,6 +201,7 @@ def setup_quest_commands(bot, db, guild_id):
                 guild_id,
                 quest_name.strip(),
                 quest_type.strip(),
+                level_bracket,
                 quest_start_date,
                 dm_user.id
             )
@@ -228,6 +273,137 @@ def setup_quest_commands(bot, db, guild_id):
             logger.error(f"Error adding character to quest: {e}")
             await interaction.response.send_message(
                 "An error occurred while adding the character. They may already be in this quest.",
+                ephemeral=True
+            )
+
+    @bot.tree.command(name="quest_remove_pc", description="[DM] Remove a PC from an active quest")
+    @app_commands.describe(
+        quest_name="Name of the quest",
+        character="Character name to remove (type to search)"
+    )
+    @app_commands.autocomplete(quest_name=active_quest_autocomplete, character=all_characters_autocomplete)
+    async def quest_remove_pc(
+        interaction: discord.Interaction,
+        quest_name: str,
+        character: str
+    ):
+        """Remove a PC from an active quest"""
+        # Check DM permission
+        if not await has_dm_permission(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to modify quests.",
+                ephemeral=True
+            )
+            return
+
+        # Find the quest
+        quest = await db.get_quest_by_name(guild_id, quest_name)
+        if not quest:
+            await interaction.response.send_message(
+                f"Active quest '{quest_name}' not found.",
+                ephemeral=True
+            )
+            return
+
+        # Check if quest is completed
+        if quest['status'] == 'completed':
+            await interaction.response.send_message(
+                f"Cannot remove participants from completed quest **{quest_name}**.",
+                ephemeral=True
+            )
+            return
+
+        # Find the character (search across all users)
+        char_result = await db.find_character_by_name_any_user(character)
+        if not char_result:
+            await interaction.response.send_message(
+                f"Character '{character}' not found.",
+                ephemeral=True
+            )
+            return
+
+        user_id, char_data = char_result
+        character_id = char_data['id']
+        character_name = char_data['name']
+
+        # Remove participant
+        try:
+            removed = await db.remove_quest_participant(quest['id'], character_id)
+            if removed:
+                await interaction.response.send_message(
+                    f"Removed **{character_name}** from quest **{quest_name}**",
+                    ephemeral=True
+                )
+                logger.info(f"Removed character {character_name} (ID: {character_id}) from quest {quest['id']}")
+            else:
+                await interaction.response.send_message(
+                    f"**{character_name}** is not in quest **{quest_name}**.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error removing character from quest: {e}")
+            await interaction.response.send_message(
+                "An error occurred while removing the character.",
+                ephemeral=True
+            )
+
+    @bot.tree.command(name="quest_join", description="Join an active quest with your character")
+    @app_commands.describe(
+        quest_name="Name of the quest to join",
+        character="Your character to join with (type to search)"
+    )
+    @app_commands.autocomplete(quest_name=active_quest_autocomplete, character=user_characters_autocomplete)
+    async def quest_join(
+        interaction: discord.Interaction,
+        quest_name: str,
+        character: str
+    ):
+        """Allow players to join quests with their chosen character"""
+        # Find the character by name (only for this user)
+        char_result = await db.get_character(interaction.user.id, character)
+        if not char_result:
+            await interaction.response.send_message(
+                f"You don't have a character named '{character}'.",
+                ephemeral=True
+            )
+            return
+
+        character_id = char_result['id']
+        character_name = char_result['name']
+        current_xp = char_result['xp']
+        current_level, _, _ = get_level_and_progress(current_xp)
+
+        # Find the quest (active only)
+        quest = await db.get_quest_by_name(guild_id, quest_name)
+        if not quest:
+            await interaction.response.send_message(
+                f"Active quest '{quest_name}' not found.",
+                ephemeral=True
+            )
+            return
+
+        # Validate level bracket
+        if not is_level_in_bracket(current_level, quest['level_bracket']):
+            await interaction.response.send_message(
+                f"Your character **{character_name}** (Level {current_level}) cannot join this quest.\n"
+                f"This quest is for level bracket **{quest['level_bracket']}**.",
+                ephemeral=True
+            )
+            return
+
+        # Add participant
+        try:
+            await db.add_quest_participant(quest['id'], character_id, current_level, current_xp)
+            await interaction.response.send_message(
+                f"**{character_name}** (Level {current_level}) has joined quest **{quest_name}**!\n"
+                f"Starting Level: {current_level} (XP: {current_xp:,})",
+                ephemeral=True
+            )
+            logger.info(f"Player {interaction.user.id} joined quest {quest['id']} with character {character_name} (ID: {character_id})")
+        except Exception as e:
+            logger.error(f"Error adding player to quest: {e}")
+            await interaction.response.send_message(
+                "An error occurred while joining the quest. You may already be in this quest.",
                 ephemeral=True
             )
 
@@ -353,6 +529,77 @@ def setup_quest_commands(bot, db, guild_id):
                 ephemeral=True
             )
 
+    @bot.tree.command(name="quest_delete", description="[DM] Delete an active quest")
+    @app_commands.describe(quest_name="Name of the quest to delete")
+    @app_commands.autocomplete(quest_name=active_quest_autocomplete)
+    async def quest_delete(
+        interaction: discord.Interaction,
+        quest_name: str
+    ):
+        """Delete an active quest (cannot delete completed quests)"""
+        # Check DM permission
+        if not await has_dm_permission(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to delete quests.",
+                ephemeral=True
+            )
+            return
+
+        # Find the quest
+        quest = await db.get_quest_by_name(guild_id, quest_name)
+        if not quest:
+            await interaction.response.send_message(
+                f"Active quest '{quest_name}' not found.",
+                ephemeral=True
+            )
+            return
+
+        # Check if quest is completed
+        if quest['status'] == 'completed':
+            await interaction.response.send_message(
+                f"Cannot delete completed quest **{quest_name}**.\n"
+                f"Completed quests are locked to preserve history.",
+                ephemeral=True
+            )
+            return
+
+        # Get quest details for confirmation
+        participants = await db.get_quest_participants(quest['id'])
+        monsters = await db.get_quest_monsters(quest['id'])
+
+        # Build confirmation message
+        confirm_msg = f"⚠️ **Confirm Quest Deletion**\n\n"
+        confirm_msg += f"Quest: **{quest_name}**\n"
+        confirm_msg += f"Type: {quest['quest_type']}\n"
+        confirm_msg += f"Level Bracket: {quest['level_bracket']}\n"
+        confirm_msg += f"Participants: {len(participants)}\n"
+        confirm_msg += f"Monsters Added: {len(monsters)}\n\n"
+        confirm_msg += f"**This will permanently delete:**\n"
+        confirm_msg += f"- The quest and all its data\n"
+        confirm_msg += f"- All participant records\n"
+        confirm_msg += f"- All monster/encounter records\n"
+        confirm_msg += f"- All DM assignments\n\n"
+        confirm_msg += f"**This action cannot be undone!**\n"
+        confirm_msg += f"Are you sure you want to delete this quest?"
+
+        # Create confirmation view
+        view = QuestDeleteConfirmView(
+            quest['id'],
+            quest_name,
+            db,
+            len(participants),
+            len(monsters)
+        )
+
+        try:
+            await interaction.response.send_message(confirm_msg, view=view, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error showing quest delete confirmation: {e}")
+            await interaction.response.send_message(
+                "An error occurred while preparing quest deletion.",
+                ephemeral=True
+            )
+
     @bot.tree.command(name="quest_add_monster", description="[DM] Add monster/encounter to a quest")
     @app_commands.describe(
         quest_name="Name of the quest",
@@ -458,7 +705,7 @@ def setup_quest_commands(bot, db, guild_id):
         # Build embed
         embed = discord.Embed(
             title=f"{quest['name']}",
-            description=f"**Type:** {quest['quest_type']}\n**Status:** {quest['status'].capitalize()}",
+            description=f"**Type:** {quest['quest_type']}\n**Level Bracket:** {quest['level_bracket']}\n**Status:** {quest['status'].capitalize()}",
             color=discord.Color.blue() if quest['status'] == 'active' else discord.Color.green()
         )
 
@@ -542,6 +789,7 @@ def setup_quest_commands(bot, db, guild_id):
             pc_count = len(participants)
 
             value = f"**Type:** {quest['quest_type']}\n"
+            value += f"**Level Bracket:** {quest['level_bracket']}\n"
             value += f"**Started:** {quest['start_date']}\n"
             value += f"**Participants:** {pc_count}"
 
@@ -553,10 +801,46 @@ def setup_quest_commands(bot, db, guild_id):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="quest_history", description="View details of a completed quest")
+    @bot.tree.command(name="quest_list_completed", description="List all completed quests")
+    async def quest_list_completed(interaction: discord.Interaction):
+        """List all completed quests in the server"""
+        quests = await db.get_completed_quests(guild_id)
+
+        if not quests:
+            await interaction.response.send_message(
+                "No completed quests.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="Completed Quests",
+            color=discord.Color.green()
+        )
+
+        for quest in quests[:25]:  # Limit to 25 for embed field limits
+            # Get participant count
+            participants = await db.get_quest_participants(quest['id'])
+            pc_count = len(participants)
+
+            value = f"**Type:** {quest['quest_type']}\n"
+            value += f"**Level Bracket:** {quest['level_bracket']}\n"
+            value += f"**Started:** {quest['start_date']}\n"
+            value += f"**Ended:** {quest['end_date']}\n"
+            value += f"**Participants:** {pc_count}"
+
+            embed.add_field(
+                name=quest['name'],
+                value=value,
+                inline=False
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="quest_info_completed", description="View details of a completed quest")
     @app_commands.describe(quest_name="Name of the completed quest")
     @app_commands.autocomplete(quest_name=completed_quest_autocomplete)
-    async def quest_history(interaction: discord.Interaction, quest_name: str):
+    async def quest_info_completed(interaction: discord.Interaction, quest_name: str):
         """Display detailed information about a completed quest"""
         # Find the quest (completed only)
         quest = await db.get_completed_quest_by_name(guild_id, quest_name)
@@ -575,7 +859,7 @@ def setup_quest_commands(bot, db, guild_id):
         # Build embed
         embed = discord.Embed(
             title=f"📜 {quest['name']}",
-            description=f"**Type:** {quest['quest_type']}\n**Status:** Completed",
+            description=f"**Type:** {quest['quest_type']}\n**Level Bracket:** {quest['level_bracket']}\n**Status:** Completed",
             color=discord.Color.green()
         )
 

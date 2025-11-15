@@ -674,16 +674,16 @@ class Database:
     # ==================== QUEST METHODS ====================
 
     async def create_quest(self, guild_id: int, name: str, quest_type: str,
-                          start_date: date, primary_dm_user_id: int) -> int:
+                          level_bracket: str, start_date: date, primary_dm_user_id: int) -> int:
         """Create a new quest and return its ID"""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Create quest
                 quest_id = await conn.fetchval("""
-                    INSERT INTO quests (guild_id, name, quest_type, start_date, status)
-                    VALUES ($1, $2, $3, $4, 'active')
+                    INSERT INTO quests (guild_id, name, quest_type, level_bracket, start_date, status)
+                    VALUES ($1, $2, $3, $4, $5, 'active')
                     RETURNING id
-                """, guild_id, name, quest_type, start_date)
+                """, guild_id, name, quest_type, level_bracket, start_date)
 
                 # Add primary DM
                 await conn.execute("""
@@ -703,6 +703,16 @@ class Database:
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (quest_id, character_id) DO NOTHING
             """, quest_id, character_id, starting_level, starting_xp)
+
+    async def remove_quest_participant(self, quest_id: int, character_id: int) -> bool:
+        """Remove a PC from a quest. Returns True if removed, False if not found"""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                DELETE FROM quest_participants
+                WHERE quest_id = $1 AND character_id = $2
+            """, quest_id, character_id)
+            # result is like "DELETE N" where N is the number of rows deleted
+            return result == "DELETE 1"
 
     async def add_quest_dm(self, quest_id: int, user_id: int, is_primary: bool = False):
         """Add a DM to a quest"""
@@ -728,6 +738,16 @@ class Database:
                 SELECT * FROM quests
                 WHERE guild_id = $1 AND status = 'active'
                 ORDER BY start_date DESC, created_at DESC
+            """, guild_id)
+            return [dict(r) for r in results]
+
+    async def get_completed_quests(self, guild_id: int) -> List[Dict]:
+        """Get all completed quests for a guild"""
+        async with self.pool.acquire() as conn:
+            results = await conn.fetch("""
+                SELECT * FROM quests
+                WHERE guild_id = $1 AND status = 'completed'
+                ORDER BY end_date DESC, created_at DESC
             """, guild_id)
             return [dict(r) for r in results]
 
@@ -781,6 +801,17 @@ class Database:
                 WHERE id = $1 AND status = 'active'
             """, quest_id, end_date)
             # Check if any rows were updated
+            return result.split()[-1] != '0'
+
+    async def delete_quest(self, quest_id: int) -> bool:
+        """Delete a quest (only if active). Cascades to participants, DMs, and monsters.
+        Returns True if deleted, False if not found or already completed."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                DELETE FROM quests
+                WHERE id = $1 AND status = 'active'
+            """, quest_id)
+            # Check if any rows were deleted
             return result.split()[-1] != '0'
 
     async def get_character_active_quests(self, character_id: int) -> List[Dict]:

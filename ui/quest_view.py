@@ -108,3 +108,64 @@ class QuestEndConfirmView(discord.ui.View):
         # Disable all buttons
         for item in self.children:
             item.disabled = True
+
+
+class QuestDeleteConfirmView(discord.ui.View):
+    """Confirmation view for deleting a quest"""
+
+    def __init__(self, quest_id: int, quest_name: str, db, participant_count: int, monster_count: int):
+        super().__init__(timeout=180)  # 3 minute timeout
+        self.quest_id = quest_id
+        self.quest_name = quest_name
+        self.db = db
+        self.participant_count = participant_count
+        self.monster_count = monster_count
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Cancel quest deletion"""
+        await interaction.response.edit_message(
+            content=f"Deletion cancelled. **{self.quest_name}** has not been deleted.",
+            view=None
+        )
+        self.stop()
+
+    @discord.ui.button(label="Delete Quest", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Confirm quest deletion"""
+        try:
+            # Delete the quest
+            deleted = await self.db.delete_quest(self.quest_id)
+            if not deleted:
+                await interaction.response.send_message(
+                    f"Quest '{self.quest_name}' could not be deleted (may already be completed or deleted).",
+                    ephemeral=True
+                )
+                self.stop()
+                return
+
+            # Build success message
+            message = f"✅ Quest **{self.quest_name}** has been deleted.\n\n"
+            message += f"Removed:\n"
+            message += f"- {self.participant_count} participant(s)\n"
+            message += f"- {self.monster_count} monster(s)\n"
+            message += f"\n_All quest data has been permanently removed._"
+
+            # Update the original message
+            await interaction.response.edit_message(content=message, view=None)
+            logger.info(f"Quest '{self.quest_name}' (ID: {self.quest_id}) deleted by user {interaction.user.id}")
+
+        except Exception as e:
+            logger.error(f"Error deleting quest '{self.quest_name}': {e}")
+            await interaction.response.send_message(
+                "An error occurred while deleting the quest.",
+                ephemeral=True
+            )
+        finally:
+            self.stop()
+
+    async def on_timeout(self):
+        """Called when the view times out"""
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True

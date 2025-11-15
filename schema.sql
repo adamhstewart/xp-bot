@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS quests (
     guild_id BIGINT NOT NULL,
     name VARCHAR(200) NOT NULL,
     quest_type VARCHAR(100) NOT NULL,
+    level_bracket VARCHAR(20) NOT NULL,
     start_date DATE NOT NULL DEFAULT CURRENT_DATE,
     end_date DATE,
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'completed')),
